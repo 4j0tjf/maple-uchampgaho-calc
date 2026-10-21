@@ -2,7 +2,12 @@
   "name": "maple-uchampgaho-calc",
   "private": true,
   "description": "챔피언 코인으로 한 달 동안 쓸 챔피언의 가호 단계를 정하는 계산기",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "start": "node server.mjs",
+    "test": "node --test"
   }
 }

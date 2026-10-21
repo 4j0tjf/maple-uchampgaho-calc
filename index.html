@@ -64,21 +64,10 @@
       </form>
     </div>
     <p class="hint">주간 사용 횟수는 위·아래 화살표로 1씩 바꿉니다. 능력치 칸에서 단계를 고르면 그 캐릭터는 그 능력치를 매번 그 단계로 씁니다(고정). <b>자동</b>으로 두면 고정 코인을 빼고 남은 코인으로 다섯 능력치를 고르게 올립니다. 1회 코인은 능력치 하나에 1단계 50 · 2단계 125 · 3단계 200 · 4단계 300 · 5단계 500입니다.</p>
-    <details class="api-box" id="api-box">
-      <summary>
-        <span>넥슨 API 키 · 캐릭터 이미지</span>
-        <span class="api-state off" id="api-state">없음</span>
-      </summary>
-      <form id="api-form" class="api-form">
-        <label for="api-key" class="sr-only">넥슨 Open API 키</label>
-        <input id="api-key" type="password" class="input" autocomplete="off" spellcheck="false">
-        <button type="submit" class="btn">저장하고 불러오기</button>
-        <button type="button" class="btn" id="api-refresh">다시 불러오기</button>
-        <button type="button" class="btn" id="api-clear">키 지우기</button>
-      </form>
-      <p class="hint">캐릭터 이름으로 넥슨 Open API에서 이미지·레벨·직업·월드를 가져옵니다. 키는 <a href="https://openapi.nexon.com" target="_blank" rel="noopener">openapi.nexon.com</a>에서 애플리케이션을 등록하면 받습니다. 키는 이 브라우저에만 저장하고 넥슨 API 말고는 어디에도 보내지 않습니다.</p>
-      <p class="hint" id="api-message" role="status"></p>
-    </details>
+    <div class="image-note" id="image-note" hidden>
+      <span id="image-note-text" role="status"></span>
+      <button type="button" class="btn btn-sm" id="image-refresh" hidden>캐릭터 이미지 새로고침</button>
+    </div>
     <div id="char-list" class="char-list"></div>
   </section>
 

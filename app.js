@@ -7,8 +7,6 @@
 
   const P = window.GahoPlan;
   const STORAGE_KEY = "uchamp-gaho:v1";
-  const KEY_STORAGE = "uchamp-gaho:nexon-key";
-  const NEXON_BASE = "https://open.api.nexon.com/maplestory/v1";
   /** 캐릭터 이미지·레벨은 하루 지나면 다시 불러온다(코디를 바꾸면 이미지 주소가 바뀐다). */
   const NEXON_STALE_MS = 24 * 3600 * 1000;
   const MAX_WEEKLY = 99;
@@ -19,7 +17,6 @@
   const fmt = (n) => Number(n).toLocaleString("ko-KR");
   const statOf = (key) => P.STATS.find((s) => s.key === key);
   const nameOf = (c) => c.name.trim() || "이름 없음";
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   function h(tag, props, ...children) {
     const node = document.createElement(tag);
@@ -149,121 +146,87 @@
   const weeksNow = () => P.remainingWeeks(today, state.includeCurrent);
   const range = (month, w) => (w.start === w.end ? `${month}/${w.start}` : `${month}/${w.start}~${month}/${w.end}`);
 
-  /* ---------- 넥슨 Open API ---------- */
+  /* ---------- 캐릭터 이미지 (넥슨 Open API, 계산기 서버가 대신 부른다) ---------- */
 
-  let apiKey = "";
-  try {
-    apiKey = localStorage.getItem(KEY_STORAGE) || "";
-  } catch {
-    /* 저장소를 못 쓰면 키도 이번 탭에서만 쓴다. */
-  }
+  /**
+   * checking → ready(서버에 넥슨 키가 있음) | no-key(서버는 있는데 키가 없음) | offline(서버 없이 파일로 열었거나 미리보기).
+   * 넥슨 키는 서버의 .env에만 있고 화면은 /api/character만 부른다.
+   */
+  let imageService = "checking";
 
-  class NexonError extends Error {
-    constructor(code, short, message) {
-      super(message);
-      this.code = code;
-      this.short = short;
+  async function checkImageService() {
+    try {
+      const response = await fetch("api/status", { cache: "no-store" });
+      const body = response.ok ? await response.json() : null;
+      imageService = body ? (body.nexon ? "ready" : "no-key") : "offline";
+    } catch {
+      imageService = "offline";
     }
+    renderImageNote();
   }
 
-  const NEXON_ERRORS = {
-    OPENAPI00001: ["넥슨 서버 오류", "넥슨 API 서버 오류입니다. 잠시 후 다시 시도하세요."],
-    OPENAPI00002: ["API 키 권한 없음", "넥슨 API 키에 권한이 없습니다. 키를 확인하세요."],
-    OPENAPI00003: ["찾지 못함", "캐릭터 식별자가 올바르지 않습니다. 이미지를 다시 불러오세요."],
-    OPENAPI00004: ["캐릭터를 찾지 못함", "캐릭터를 찾지 못했습니다. 게임 속 캐릭터 이름과 같은지 확인하세요."],
-    OPENAPI00005: ["API 키 오류", "넥슨 API 키가 올바르지 않습니다. openapi.nexon.com에서 발급한 키를 다시 넣으세요."],
-    OPENAPI00006: ["넥슨 API 오류", "넥슨 API 주소가 바뀌었습니다. 계산기를 업데이트해야 합니다."],
-    OPENAPI00007: ["호출 한도 초과", "넥슨 API 호출 한도를 넘었습니다. 잠시 후 다시 시도하세요."],
-    OPENAPI00009: ["데이터 준비 중", "넥슨 API 데이터가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요."],
-    OPENAPI00010: ["게임 점검 중", "게임 점검 중이라 캐릭터 정보를 가져올 수 없습니다."],
-    OPENAPI00011: ["API 점검 중", "넥슨 API 점검 중이라 캐릭터 정보를 가져올 수 없습니다."],
-  };
-  const KEY_ERRORS = new Set(["OPENAPI00002", "OPENAPI00005", "network"]);
+  const lookupError = (short, message) => Object.assign(new Error(message), { short });
 
-  async function nexonGet(path) {
+  async function fetchCharacter(name) {
     let response;
     try {
-      response = await fetch(`${NEXON_BASE}${path}`, { headers: { "x-nxopen-api-key": apiKey } });
+      response = await fetch(`api/character?name=${encodeURIComponent(name)}`, { cache: "no-store" });
     } catch {
-      throw new NexonError("network", "연결 실패",
-        "넥슨 API에 연결하지 못했습니다. 인터넷 연결을 확인하세요. claude.ai 미리보기처럼 외부 요청을 막는 화면에서는 index.html을 브라우저로 직접 열어야 합니다.");
+      throw lookupError("연결 실패", "계산기 서버에 연결하지 못했습니다.");
     }
     const body = await response.json().catch(() => null);
-    if (!response.ok) {
-      const code = body?.error?.name || `HTTP ${response.status}`;
-      const [short, message] = NEXON_ERRORS[code] || ["넥슨 API 오류", `넥슨 API 오류(${code})입니다.`];
-      throw new NexonError(code, short, message);
-    }
+    if (!response.ok) throw lookupError(body?.error?.short || "불러오기 실패", body?.error?.message || `계산기 서버 오류(${response.status})입니다.`);
     return body;
   }
-
-  /** 개발 단계 키는 초당 5건까지라 캐릭터를 하나씩(호출 2건) 차례로 불러온다. */
-  let nexonQueue = Promise.resolve();
-  const enqueue = (task) => {
-    const run = nexonQueue.then(task);
-    nexonQueue = run.catch(() => {}).then(() => wait(450));
-    return run;
-  };
 
   /** 캐릭터 id → { state: "loading" } 또는 { state: "error", short, message }. 저장하지 않는다. */
   const nexonStatus = new Map();
 
-  function loadCharacter(c) {
+  async function loadCharacter(c) {
     const name = c.name.trim();
-    if (!apiKey || !name) return Promise.resolve();
+    if (imageService !== "ready" || !name) return;
     nexonStatus.set(c.id, { state: "loading" });
     refreshCharacterView(c);
-    return enqueue(async () => {
+    try {
+      const data = await fetchCharacter(name);
       if (c.name.trim() !== name || !state.characters.includes(c)) return;
-      try {
-        const { ocid } = await nexonGet(`/id?character_name=${encodeURIComponent(name)}`);
-        const basic = await nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`);
-        if (c.name.trim() !== name) return;
-        c.nexon = sanitizeNexon({
-          name: basic.character_name,
-          image: basic.character_image,
-          level: basic.character_level,
-          job: basic.character_class,
-          world: basic.world_name,
-          fetchedAt: Date.now(),
-        });
-        nexonStatus.delete(c.id);
-        save();
-      } catch (error) {
-        const known = error instanceof NexonError;
-        nexonStatus.set(c.id, { state: "error", short: known ? error.short : "불러오기 실패", message: error.message });
-        if (known && KEY_ERRORS.has(error.code)) setApiMessage(error.message, true);
-      }
-      refreshCharacterView(c);
-      renderResults();
-    });
+      c.nexon = sanitizeNexon({ ...data, fetchedAt: Date.now() });
+      nexonStatus.delete(c.id);
+      save();
+    } catch (error) {
+      if (c.name.trim() !== name) return;
+      nexonStatus.set(c.id, { state: "error", short: error.short, message: error.message });
+    }
+    refreshCharacterView(c);
+    renderResults();
   }
 
   async function loadAll(characters) {
-    if (!characters.length) {
-      setApiMessage("키를 저장했습니다. 캐릭터를 추가하면 이미지를 불러옵니다.");
-      return;
-    }
-    setApiMessage(`캐릭터 ${characters.length}명의 정보를 불러오는 중입니다.`);
+    if (!characters.length) return;
+    setImageMessage(`캐릭터 ${characters.length}명의 이미지를 불러오는 중입니다.`);
     await Promise.all(characters.map(loadCharacter));
-    const failed = characters.filter((c) => nexonStatus.get(c.id)?.state === "error").length;
-    if (!failed) setApiMessage(`캐릭터 ${characters.length}명의 정보를 불러왔습니다.`);
-    else if (failed < characters.length) setApiMessage(`${characters.length - failed}명을 불러오고 ${failed}명은 실패했습니다. 실패한 캐릭터는 이름 아래에 이유가 나옵니다.`, true);
+    const failed = characters.filter((c) => nexonStatus.get(c.id)?.state === "error");
+    if (!failed.length) setImageMessage(`캐릭터 ${characters.length}명의 이미지를 불러왔습니다.`);
+    else setImageMessage(`${failed.length}명은 불러오지 못했습니다. ${nexonStatus.get(failed[0].id).message}`, true);
   }
 
-  function setApiMessage(text, bad = false) {
-    const node = $("#api-message");
+  const IMAGE_NOTES = {
+    checking: "",
+    ready: "캐릭터 이미지·레벨·직업은 넥슨 Open API에서 가져옵니다.",
+    "no-key": "서버 .env에 NEXON_API_KEY를 넣고 서버를 다시 시작하면 캐릭터 이미지가 나옵니다.",
+    offline: "캐릭터 이미지는 계산기 서버(npm start)로 열었을 때 나옵니다.",
+  };
+
+  function setImageMessage(text, bad = false) {
+    const node = $("#image-note-text");
     node.textContent = text;
     node.classList.toggle("bad", bad);
   }
 
-  function renderApiState() {
-    const badge = $("#api-state");
-    badge.textContent = apiKey ? "저장됨" : "없음";
-    badge.className = `api-state ${apiKey ? "on" : "off"}`;
-    $("#api-key").placeholder = apiKey ? "저장된 키가 있습니다. 바꾸려면 새 키를 넣으세요" : "test_ 또는 live_로 시작하는 키";
-    $("#api-refresh").disabled = !apiKey;
-    $("#api-clear").disabled = !apiKey;
+  function renderImageNote() {
+    $("#image-note").hidden = imageService === "checking";
+    $("#image-refresh").hidden = imageService !== "ready";
+    setImageMessage(IMAGE_NOTES[imageService]);
   }
 
   /** 넥슨 캐릭터 이미지(96×96, 투명 배경). 없으면 이름 첫 글자. */
@@ -378,36 +341,7 @@
       $("#coins").focus();
     });
 
-    $("#api-form").addEventListener("submit", (event) => {
-      event.preventDefault();
-      const input = $("#api-key");
-      const key = input.value.trim();
-      if (!key) {
-        setApiMessage("넥슨 Open API 키를 넣으세요.", true);
-        return;
-      }
-      apiKey = key;
-      try {
-        localStorage.setItem(KEY_STORAGE, key);
-      } catch {
-        /* 이번 탭에서만 쓴다. */
-      }
-      input.value = "";
-      renderApiState();
-      loadAll(state.characters.filter((c) => c.name.trim()));
-    });
-    $("#api-refresh").addEventListener("click", () => loadAll(state.characters.filter((c) => c.name.trim())));
-    $("#api-clear").addEventListener("click", () => {
-      apiKey = "";
-      try {
-        localStorage.removeItem(KEY_STORAGE);
-      } catch {
-        /* 없으면 그만이다. */
-      }
-      renderApiState();
-      setApiMessage("키를 지웠습니다. 이미 불러온 이미지는 남아 있습니다.");
-    });
-    renderApiState();
+    $("#image-refresh").addEventListener("click", () => loadAll(state.characters.filter((c) => c.name.trim())));
   }
 
   function renderWeeks() {
@@ -816,7 +750,7 @@
         avatar(source, "lg"),
         h("div", { class: "char-card-title" },
           h("h3", null, nameOf(source)),
-          h("span", { class: "char-meta" }, metaText(source) || (apiKey ? "" : "넥슨 API 키를 넣으면 이미지·레벨·직업이 나옵니다")),
+          h("span", { class: "char-meta" }, metaText(source)),
           h("span", { class: "char-card-sub" },
             `주 ${char.weekly}회 · 이번 달 ${char.uses}회`,
             fixedNames.length ? ` · 고정 ${fixedNames.join(", ")}` : "")),
@@ -832,8 +766,9 @@
   renderCharacters();
   renderResults();
 
-  if (apiKey && !state.example) {
+  checkImageService().then(() => {
+    if (imageService !== "ready" || state.example) return;
     const stale = state.characters.filter((c) => c.name.trim() && (!c.nexon || Date.now() - c.nexon.fetchedAt > NEXON_STALE_MS));
-    if (stale.length) loadAll(stale);
-  }
+    loadAll(stale);
+  });
 })();

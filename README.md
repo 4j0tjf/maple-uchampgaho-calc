@@ -2,35 +2,103 @@
 
 이번 달 획득 챔피언 코인으로 캐릭터별 **챔피언의 가호** 단계를 정하고, 오늘부터 이번 달 끝까지 주차별로 몇 단계씩 쓸지 보여 준다. 추가 경험치를 뺀 다섯 능력치(올스탯, 공격력/마력, 보스 몬스터 데미지, 방어율 무시, 크리티컬 데미지)만 계산한다.
 
+시세 사이트(maple-market)·사냥 기록(maple-hunt)과 **따로 도는 별도 앱**이다. 포트, Windows 서비스, `.env`, 주소가 모두 따로이고 DB와 상단 메뉴를 같이 쓰지 않는다.
+
 | | |
 |---|---|
-| 실행 | `index.html`을 브라우저로 연다(서버·빌드 없음). GitHub Pages 같은 정적 호스팅에 그대로 올려도 된다. |
-| 저장 | 입력값은 그 브라우저의 `localStorage`(`uchamp-gaho:v1`, 넥슨 API 키는 `uchamp-gaho:nexon-key`)에만 남는다. |
-| 테스트 | `npm test` (Node 18 이상, 설치할 패키지 없음) |
+| 서버 | `node server.mjs` → `127.0.0.1:3300` (Node 18 이상, 설치할 패키지 없음) |
+| 서비스 | `MapleGahoWeb` (NSSM) |
+| 설정 | `.env` (`.env.example` 복사): `HOST`, `PORT`, `NEXON_API_KEY`, `NEXON_DAILY_LIMIT` |
+| 외부 주소 (선택) | 기존 Cloudflare 터널에 하위 도메인 하나(예: `gaho.19991115.xyz`)를 더한다 |
+| 저장 | 입력값은 브라우저의 `localStorage`(`uchamp-gaho:v1`)에만 남는다. 주소마다 따로라 `127.0.0.1:3300`과 외부 주소의 입력값은 서로 다르다. |
+| 테스트 | `npm test` |
+
+## 서버 PC에 설치 (Windows, 한 번만)
+
+1. 받기와 설정. 폴더는 다른 사이트 옆에 둔다.
+
+   ```powershell
+   git clone -b claude/modest-fermi-b4mhaf https://github.com/4j0tjf/maple-uchampgaho-calc D:\evelopment\maple-uchampgaho-calc
+   cd D:\evelopment\maple-uchampgaho-calc
+   Copy-Item .env.example .env
+   notepad .env
+   ```
+
+   `.env`의 `NEXON_API_KEY`에 넥슨 Open API 키를 넣는다. maple-hunt의 `.env`와 같은 키를 써도 된다. 비워 두면 계산은 되고 캐릭터 이미지만 꺼진다.
+
+2. 포트 확인과 시험 실행. 첫 줄이 아무것도 출력하지 않으면 3300이 비어 있다(쓰는 중이면 `.env`의 `PORT`를 바꾼다).
+
+   ```powershell
+   Get-NetTCPConnection -LocalPort 3300 -ErrorAction SilentlyContinue
+   npm test
+   node server.mjs
+   ```
+
+   `http://127.0.0.1:3300`을 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
+
+3. 서비스 등록 — 관리자 PowerShell. maple-hunt와 같은 NSSM으로 `node server.mjs`를 바로 부른다.
+
+   ```powershell
+   $nssm = "C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\NSSM.NSSM_Microsoft.Winget.Source_8wekyb3d8bbwe\nssm-2.24-101-g897c7ad\win64\nssm.exe"
+   $node = (Get-Command node).Source
+   $root = "D:\evelopment\maple-uchampgaho-calc"
+   New-Item -ItemType Directory -Force "$root\logs" | Out-Null
+   & $nssm install MapleGahoWeb $node "$root\server.mjs"
+   & $nssm set MapleGahoWeb AppDirectory $root
+   & $nssm set MapleGahoWeb AppStdout "$root\logs\web.log"
+   & $nssm set MapleGahoWeb AppStderr "$root\logs\web.log"
+   & $nssm start MapleGahoWeb
+   ```
+
+4. (선택) 밖에서 열기 — 기존 터널(`MapleTunnel`)에 **하위 도메인**을 더한다. 시세 사이트 주소(`19991115.xyz`)의 경로를 빌리지 않으므로 기존 규칙은 그대로 둔다.
+
+   - DNS: `cloudflared tunnel route dns <터널 이름> gaho.19991115.xyz` (터널 이름은 `config.yml`의 `tunnel:` 값)
+   - `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고 `Restart-Service MapleTunnel`:
+
+     ```yaml
+       - hostname: gaho.19991115.xyz
+         service: http://127.0.0.1:3300
+     ```
+
+   주소를 아는 사람은 누구나 열 수 있다. 넥슨 키는 서버에만 있고 화면에는 나가지 않는다. 남이 캐릭터 조회를 많이 눌러도 하루 `NEXON_DAILY_LIMIT`(기본 300건)에서 멈춰 maple-hunt가 쓸 몫이 남는다.
+
+   같은 공유기의 다른 기기에서만 열려면 터널 대신 `.env`를 `HOST=0.0.0.0`으로 바꾸고 방화벽을 연다: `New-NetFirewallRule -DisplayName "MapleGaho 3300" -Direction Inbound -Protocol TCP -LocalPort 3300 -Action Allow -Profile Private`, 그다음 `Restart-Service MapleGahoWeb`.
+
+## 코드를 고친 뒤 적용
+
+빌드가 없다. 받고 서비스만 다시 시작한다. `.env`를 고쳤을 때도 다시 시작한다.
+
+```powershell
+cd D:\evelopment\maple-uchampgaho-calc
+git pull
+Restart-Service MapleGahoWeb
+```
+
+점검: `Invoke-RestMethod http://127.0.0.1:3300/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
 
 ## 화면
 
 1. **이번 달 획득 코인**: 이번 달 남은 주 동안 쓸 코인을 넣는다. 주 수는 오늘(한국 시간) 기준으로 자동 계산한다. 이번 주를 이미 썼으면 "이번 주에도 쓸 수 있음"을 끈다.
-2. **캐릭터 / 캐릭터 추가**: 이름을 넣고 추가한다. 주간 사용 횟수는 기본 1이고 위 화살표 +1, 아래 화살표 −1(입력 칸에서 키보드 ↑↓도 같다). 능력치 칸에서 단계를 고르면 그 능력치를 매번 그 단계로 쓴다(고정, **한 번에**로 다섯 칸을 함께 바꾼다). **안 씀**은 0단계 고정, **자동**은 계산기가 정한다.
+2. **캐릭터 / 캐릭터 추가**: 이름을 넣고 추가하면 넥슨 캐릭터 이미지·레벨·직업·월드가 붙는다. 주간 사용 횟수는 기본 1이고 위 화살표 +1, 아래 화살표 −1(입력 칸에서 키보드 ↑↓도 같다). 능력치 칸에서 단계를 고르면 그 능력치를 매번 그 단계로 쓴다(고정, **한 번에**로 다섯 칸을 함께 바꾼다). **안 씀**은 0단계 고정, **자동**은 계산기가 정한다.
 3. **월간 플랜**: 캐릭터별 단계, 1회 코인, 이번 달 코인. 한 단계 위로 쓰는 횟수가 있으면 "4~5단계 · 5단계 5회 · 4단계 1회"처럼 적는다.
 4. **주차별 사용**: 주마다 캐릭터별 코인(1회 코인 × 횟수), 한 단계 위로 쓰는 능력치, 주 합계, 누적, 남은 코인.
 5. **주차별 캐릭터 상세 사용**: 캐릭터마다 주차 × 능력치 표로 몇 단계(+수치)를 쓰는지. 한 주 안에서 단계가 갈리면 줄을 나눈다.
 
-## 넥슨 Open API (캐릭터 이미지)
+## 서버와 넥슨 Open API
 
-**캐릭터** 칸의 "넥슨 API 키 · 캐릭터 이미지"에 [openapi.nexon.com](https://openapi.nexon.com)에서 받은 키를 넣으면, 캐릭터 이름으로 이미지·레벨·직업·월드를 가져온다.
-
-- 호출: `GET /maplestory/v1/id?character_name=` → `ocid`, `GET /maplestory/v1/character/basic?ocid=` → `character_image`, `character_level`, `character_class`, `world_name`. 헤더 `x-nxopen-api-key`.
-- 캐릭터를 추가하거나 이름을 고칠 때, 키를 저장할 때 불러온다. 페이지를 열 때 하루 넘은 정보는 다시 불러온다(코디를 바꾸면 이미지 주소가 바뀐다). 개발 단계 키 한도(초당 5건)에 맞춰 캐릭터를 하나씩 차례로 부른다.
-- 서버가 없는 정적 페이지라 키는 브라우저에서 넥슨 API로 바로 보낸다. 키는 그 브라우저에만 저장하고 다른 곳으로 보내지 않는다. 남과 같이 쓰는 컴퓨터에서는 다 쓰고 "키 지우기"를 누른다.
-- claude.ai 미리보기처럼 외부 요청을 막는 화면에서는 불러오지 못한다. `index.html`을 직접 열어 쓴다.
+- `GET /` 화면 파일(`index.html`, `styles.css`, `app.js`, `plan.js`, `icon.svg`)만 내준다. `.env`·서버 코드는 경로를 맞춰도 404다.
+- `GET /api/status` → `{ nexon }`: 서버에 키가 있는지. 화면은 이것으로 이미지 조회를 켜고 끈다.
+- `GET /api/character?name=` → `{ name, image, level, job, world }`. 서버가 넥슨 `GET /maplestory/v1/id?character_name=`로 ocid를, `GET /maplestory/v1/character/basic?ocid=`로 기본 정보를 받는다(헤더 `x-nxopen-api-key`). 실패하면 `{ error: { code, short, message } }`.
+- 호출을 아낀다: ocid 7일, 기본 정보 1시간 캐시. 서버 전체에서 한 줄로 세워 초당 5건을 넘지 않는다. 하루(한국 날짜) `NEXON_DAILY_LIMIT`건을 넘으면 막는다. 캐릭터 1명 조회에 2건 든다.
+- 화면은 캐릭터를 추가하거나 이름을 고칠 때, "캐릭터 이미지 새로고침"을 누를 때, 페이지를 열었을 때 하루 넘은 정보만 다시 부른다(코디를 바꾸면 이미지 주소가 바뀐다).
+- `index.html`을 서버 없이 파일로 열어도 계산은 된다. 이미지만 나오지 않는다.
 
 ## 파일
 
-- `plan.js`: 계산(배분, 사용 회차별 단계, 주차별 계획, 남은 주). 화면과 테스트가 함께 쓴다. `file://`로 열어도 동작하도록 모듈이 아닌 일반 스크립트로 `window.GahoPlan`에 붙는다.
-- `app.js`: 화면과 넥슨 API 호출.
-- `styles.css`: maple-market·maple-hunt와 같은 라이트·다크 토큰. 시스템 테마를 따른다.
-- `tests/plan.test.js`: 계산 테스트.
+- `server.mjs`: 화면 파일과 `/api/*`. `nexon.mjs`: 넥슨 조회(캐시, 줄 세우기, 하루 한도).
+- `plan.js`: 계산(배분, 사용 회차별 단계, 주차별 계획, 남은 주). 화면과 테스트가 함께 쓴다. 모듈이 아닌 일반 스크립트로 `window.GahoPlan`에 붙는다.
+- `app.js`: 화면. `styles.css`: maple-market·maple-hunt와 같은 라이트·다크 토큰(시스템 테마를 따른다).
+- `tests/plan.test.js`: 계산 테스트. `tests/server.test.mjs`: 서버·넥슨 조회 테스트(넥슨은 흉내 낸 응답).
 
 ## 계산
 

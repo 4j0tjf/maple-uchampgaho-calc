@@ -1,0 +1,5 @@
+# 넥슨 API 키가 든 설정. .env.example만 커밋한다.
+.env
+# 서비스 실행 로그
+/logs
+node_modules/
