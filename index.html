@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>유챔 가호 계산기</title>
-<meta name="description" content="한 달 동안 받을 챔피언 코인으로 캐릭터별 챔피언의 가호 단계를 정한다">
+<meta name="description" content="이번 달 획득 챔피언 코인으로 캐릭터별 챔피언의 가호 단계를 주차별로 정한다">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,7 +19,7 @@
     <div class="masthead-text">
       <p class="eyebrow">유니온 챔피언 · 챔피언의 가호</p>
       <h1>유챔 가호 계산기</h1>
-      <p class="lede">한 달 동안 받을 챔피언 코인과 캐릭터별 주간 사용 횟수를 넣으면, 추가 경험치를 뺀 다섯 능력치를 몇 단계로 쓸지 코인이 남지 않게 정해 줍니다.</p>
+      <p class="lede">이번 달 획득 코인과 캐릭터별 주간 사용 횟수를 넣으면, 오늘부터 이번 달 끝까지 추가 경험치를 뺀 다섯 능력치를 몇 단계로 쓸지 코인이 남지 않게 정해 줍니다.</p>
     </div>
   </div>
 </header>
@@ -30,39 +30,27 @@
     <button type="button" class="btn btn-sm" id="clear-example">예시 지우기</button>
   </div>
 
-  <section class="panel" aria-labelledby="setup-title">
-    <h2 id="setup-title">이번 달 조건</h2>
-    <div class="setup-grid">
+  <section class="panel" aria-labelledby="coins-title">
+    <h2 id="coins-title">이번 달 획득 코인</h2>
+    <div class="coins-grid">
       <div class="field">
-        <label for="coins">월간 획득 챔피언 코인</label>
         <div class="coin-input">
-          <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000">
+          <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000" aria-labelledby="coins-title">
           <span class="unit">코인</span>
         </div>
-        <p class="hint">챔피언 레이드로 한 달 동안 받을 코인. 매월 1일 0시에 초기화됩니다.</p>
+        <p class="hint">이번 달 남은 주 동안 쓸 챔피언 코인. 코인은 매월 1일 0시에 초기화됩니다.</p>
       </div>
-      <div class="field">
-        <label for="month">계산할 달</label>
-        <select id="month" class="input"></select>
-        <p class="hint" id="month-hint"></p>
-      </div>
-      <div class="field">
-        <label for="weeks">주 수</label>
-        <div id="weeks-slot"></div>
-        <p class="hint" id="weeks-hint"></p>
-      </div>
-    </div>
-
-    <div class="weights">
-      <div class="weights-head">
-        <h3>자동 칸을 채우는 기준</h3>
-        <div class="segmented" role="group" aria-label="능력치 가치 프리셋">
-          <button type="button" data-preset="even">고르게</button>
-          <button type="button" data-preset="boss">보스 딜 추정</button>
+      <div class="weeks-box">
+        <div class="weeks-head">
+          <span id="today-label"></span>
+          <strong id="weeks-count"></strong>
         </div>
+        <ol class="week-chips" id="week-chips"></ol>
+        <label class="check" for="include-current">
+          <input type="checkbox" id="include-current">
+          <span id="include-current-label">이번 주에도 쓸 수 있음</span>
+        </label>
       </div>
-      <p class="hint">능력치마다 가치(0~10)를 정합니다. 단계를 하나 올릴 때 드는 코인 대비 가치가 큰 칸부터 채웁니다. <b>고르게</b>는 다섯 능력치를 같은 단계로 맞추고, <b>보스 딜 추정</b>은 1단계가 최종 데미지를 올리는 비율을 대략 보뎀 5 : 방무 5 : 공/마 2 : 크뎀 2 : 올스탯 1로 봅니다(보뎀+데미지 300%, 방무 93%, 보스 방어율 300% 기준). 가치 0은 자동으로 올리지 않습니다.</p>
-      <div class="weights-grid" id="weights"></div>
     </div>
   </section>
 
@@ -71,11 +59,26 @@
       <h2 id="chars-title">캐릭터</h2>
       <form id="add-form" class="add-form">
         <label for="new-name" class="sr-only">새 캐릭터 이름</label>
-        <input id="new-name" class="input" placeholder="캐릭터 이름" maxlength="20" autocomplete="off">
+        <input id="new-name" class="input" placeholder="캐릭터 이름" maxlength="20" autocomplete="off" spellcheck="false">
         <button type="submit" class="btn btn-primary">캐릭터 추가</button>
       </form>
     </div>
-    <p class="hint">주간 사용 횟수는 위·아래 화살표로 1씩 바꿉니다. 능력치 칸에서 단계를 고르면 그 캐릭터는 그 능력치를 매번 그 단계로 씁니다(고정). <b>자동</b>으로 두면 고정 코인을 빼고 남은 코인으로 계산기가 단계를 정합니다.</p>
+    <p class="hint">주간 사용 횟수는 위·아래 화살표로 1씩 바꿉니다. 능력치 칸에서 단계를 고르면 그 캐릭터는 그 능력치를 매번 그 단계로 씁니다(고정). <b>자동</b>으로 두면 고정 코인을 빼고 남은 코인으로 다섯 능력치를 고르게 올립니다. 1회 코인은 능력치 하나에 1단계 50 · 2단계 125 · 3단계 200 · 4단계 300 · 5단계 500입니다.</p>
+    <details class="api-box" id="api-box">
+      <summary>
+        <span>넥슨 API 키 · 캐릭터 이미지</span>
+        <span class="api-state off" id="api-state">없음</span>
+      </summary>
+      <form id="api-form" class="api-form">
+        <label for="api-key" class="sr-only">넥슨 Open API 키</label>
+        <input id="api-key" type="password" class="input" autocomplete="off" spellcheck="false">
+        <button type="submit" class="btn">저장하고 불러오기</button>
+        <button type="button" class="btn" id="api-refresh">다시 불러오기</button>
+        <button type="button" class="btn" id="api-clear">키 지우기</button>
+      </form>
+      <p class="hint">캐릭터 이름으로 넥슨 Open API에서 이미지·레벨·직업·월드를 가져옵니다. 키는 <a href="https://openapi.nexon.com" target="_blank" rel="noopener">openapi.nexon.com</a>에서 애플리케이션을 등록하면 받습니다. 키는 이 브라우저에만 저장하고 넥슨 API 말고는 어디에도 보내지 않습니다.</p>
+      <p class="hint" id="api-message" role="status"></p>
+    </details>
     <div id="char-list" class="char-list"></div>
   </section>
 
@@ -91,20 +94,17 @@
 
   <section class="panel" aria-labelledby="schedule-title">
     <h2 id="schedule-title">주차별 사용</h2>
+    <p class="hint">주마다 캐릭터별로 쓰는 코인(1회 코인 × 횟수)과 남은 코인입니다. 기본 단계보다 한 단계 위로 쓰는 능력치는 ↑로 표시하고, 코인이 쌓인 달 후반 주에 둡니다.</p>
     <div id="schedule"></div>
   </section>
 
-  <section class="panel" aria-labelledby="formula-title">
-    <h2 id="formula-title">계산식</h2>
-    <div id="formula"></div>
+  <section class="panel" aria-labelledby="details-title">
+    <h2 id="details-title">주차별 캐릭터 상세 사용</h2>
+    <p class="hint">캐릭터마다 주차별로 능력치를 몇 단계로 쓰는지 보여 줍니다. 파란 칸은 고정한 능력치, 강조한 칸은 그 주에 한 단계 위로 쓰는 능력치입니다.</p>
+    <div id="details" class="details"></div>
   </section>
 
-  <section class="panel" aria-labelledby="ref-title">
-    <h2 id="ref-title">단계표</h2>
-    <div id="reference"></div>
-    <p class="hint">능력치 하나를 그 단계로 30분 쓰는 데 드는 코인입니다. 여러 능력치를 고르면 코인을 더해 한 번에 냅니다. 추가 경험치는 같은 단계에서 3배(150~1,500)라 이 계산에서 뺍니다. 올스탯은 단계마다 최대 HP +500도 함께 오릅니다. 보스 맵과 챔피언 레이드에서는 켤 수 없습니다.</p>
-    <p class="source">수치 출처: <a href="https://maplestory.nexon.com/Guide/N23GameInformation/Articles/409" target="_blank" rel="noopener">메이플스토리 공식 가이드 「유니온 챔피언이란?」</a>, <a href="https://namu.wiki/w/%EC%9C%A0%EB%8B%88%EC%98%A8%20%EC%B1%94%ED%94%BC%EC%96%B8" target="_blank" rel="noopener">나무위키 「유니온 챔피언」</a> (2026년 10월 확인). 패치로 바뀌면 게임 안 수치를 따르세요.</p>
-  </section>
+  <p class="source">수치 출처: <a href="https://maplestory.nexon.com/Guide/N23GameInformation/Articles/409" target="_blank" rel="noopener">메이플스토리 공식 가이드 「유니온 챔피언이란?」</a>, <a href="https://namu.wiki/w/%EC%9C%A0%EB%8B%88%EC%98%A8%20%EC%B1%94%ED%94%BC%EC%96%B8" target="_blank" rel="noopener">나무위키 「유니온 챔피언」</a> (2026년 10월 확인). 추가 경험치(같은 단계 3배 코인)는 계산에서 뺍니다. 패치로 바뀌면 게임 안 수치를 따르세요.</p>
 </main>
 <!-- page:end -->
 <script src="plan.js"></script>

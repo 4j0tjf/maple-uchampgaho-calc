@@ -1,5 +1,5 @@
 /**
- * 화면. 입력이 바뀌면 상태를 저장하고 플랜·주차·계산식만 다시 그린다.
+ * 화면. 입력이 바뀌면 상태를 저장하고 플랜·주차별 사용·캐릭터 상세만 다시 그린다.
  * 입력 칸(캐릭터 목록)은 캐릭터를 더하거나 뺄 때만 다시 그려서, 이름을 치는 동안 포커스를 잃지 않게 한다.
  */
 (function () {
@@ -7,13 +7,19 @@
 
   const P = window.GahoPlan;
   const STORAGE_KEY = "uchamp-gaho:v1";
+  const KEY_STORAGE = "uchamp-gaho:nexon-key";
+  const NEXON_BASE = "https://open.api.nexon.com/maplestory/v1";
+  /** 캐릭터 이미지·레벨은 하루 지나면 다시 불러온다(코디를 바꾸면 이미지 주소가 바뀐다). */
+  const NEXON_STALE_MS = 24 * 3600 * 1000;
   const MAX_WEEKLY = 99;
-  const MAX_WEIGHT = 10;
   const MIXED = "mixed";
+  const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
   const $ = (selector) => document.querySelector(selector);
   const fmt = (n) => Number(n).toLocaleString("ko-KR");
   const statOf = (key) => P.STATS.find((s) => s.key === key);
+  const nameOf = (c) => c.name.trim() || "이름 없음";
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   function h(tag, props, ...children) {
     const node = document.createElement(tag);
@@ -32,11 +38,11 @@
     return node;
   }
 
-  const svg = (path, viewBox = "0 0 12 12") => {
+  const svg = (path) => {
     const wrap = document.createElement("span");
     wrap.className = "icon";
     wrap.setAttribute("aria-hidden", "true");
-    wrap.innerHTML = `<svg viewBox="${viewBox}" width="12" height="12"><path d="${path}" fill="currentColor"/></svg>`;
+    wrap.innerHTML = `<svg viewBox="0 0 12 12" width="12" height="12"><path d="${path}" fill="currentColor"/></svg>`;
     return wrap;
   };
   const upIcon = () => svg("M6 2.5 11 9H1z");
@@ -48,34 +54,23 @@
   /** 한국 날짜 기준 오늘(코인 초기화와 주간 초기화가 한국 시간이다). */
   function kstToday() {
     const d = new Date(Date.now() + 9 * 3600 * 1000);
-    return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), weekday: d.getUTCDay() };
   }
-  const monthKey = (year, month) => `${year}-${String(month).padStart(2, "0")}`;
-  const parseMonth = (key) => {
-    const [year, month] = String(key).split("-").map(Number);
-    return { year, month };
-  };
-  const shiftMonth = ({ year, month }, delta) => {
-    const index = year * 12 + (month - 1) + delta;
-    return { year: Math.floor(index / 12), month: (index % 12) + 1 };
-  };
+  const today = kstToday();
 
   const emptyFixed = () => Object.fromEntries(P.STAT_KEYS.map((key) => [key, null]));
   let seq = 0;
   const uid = () => `c${Date.now().toString(36)}${(seq++).toString(36)}`;
 
   function exampleState() {
-    const today = kstToday();
     return {
       example: true,
       coins: 20000,
-      month: monthKey(today.year, today.month),
-      weeksOverride: null,
-      weights: { ...P.WEIGHT_PRESETS.even.weights },
+      includeCurrent: true,
       characters: [
-        { id: uid(), name: "본캐", weekly: 1, fixed: { ...emptyFixed(), boss: 5, ied: 5 } },
-        { id: uid(), name: "부캐 1", weekly: 1, fixed: emptyFixed() },
-        { id: uid(), name: "부캐 2", weekly: 1, fixed: emptyFixed() },
+        { id: uid(), name: "본캐", weekly: 1, fixed: { ...emptyFixed(), boss: 5, ied: 5 }, nexon: null },
+        { id: uid(), name: "부캐 1", weekly: 1, fixed: emptyFixed(), nexon: null },
+        { id: uid(), name: "부캐 2", weekly: 1, fixed: emptyFixed(), nexon: null },
       ],
     };
   }
@@ -85,13 +80,22 @@
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   };
 
-  /** 저장본이 깨졌거나 옛 형식이어도 화면이 뜨도록 값마다 확인한다. */
+  /** 넥슨 API 응답에서 화면에 쓰는 값만 남긴다. 이미지는 넥슨 주소만 받는다. */
+  function sanitizeNexon(raw) {
+    if (!raw || typeof raw !== "object" || typeof raw.image !== "string" || !raw.image.startsWith("https://open.api.nexon.com/")) return null;
+    return {
+      name: String(raw.name ?? ""),
+      image: raw.image,
+      level: intIn(raw.level, 0, 999, 0),
+      job: String(raw.job ?? ""),
+      world: String(raw.world ?? ""),
+      fetchedAt: intIn(raw.fetchedAt, 0, Number.MAX_SAFE_INTEGER, 0),
+    };
+  }
+
+  /** 저장본이 깨졌거나 옛 형식(계산할 달·가치가 있던 때)이어도 화면이 뜨도록 값마다 확인한다. */
   function sanitize(raw) {
     if (!raw || typeof raw !== "object") return null;
-    const today = kstToday();
-    const month = /^\d{4}-\d{2}$/.test(raw.month) ? raw.month : monthKey(today.year, today.month);
-    const weights = {};
-    for (const key of P.STAT_KEYS) weights[key] = intIn(raw.weights?.[key], 0, MAX_WEIGHT, 1);
     const characters = Array.isArray(raw.characters)
       ? raw.characters.slice(0, 60).map((c) => {
           const fixed = emptyFixed();
@@ -99,15 +103,19 @@
             const value = c?.fixed?.[key];
             fixed[key] = value == null ? null : intIn(value, 0, P.MAX_LEVEL, null);
           }
-          return { id: typeof c?.id === "string" ? c.id : uid(), name: String(c?.name ?? "").slice(0, 20), weekly: intIn(c?.weekly, 0, MAX_WEEKLY, 1), fixed };
+          return {
+            id: typeof c?.id === "string" ? c.id : uid(),
+            name: String(c?.name ?? "").slice(0, 20),
+            weekly: intIn(c?.weekly, 0, MAX_WEEKLY, 1),
+            fixed,
+            nexon: sanitizeNexon(c?.nexon),
+          };
         })
       : [];
     return {
       example: Boolean(raw.example),
       coins: intIn(raw.coins, 0, 99999999, 0),
-      month,
-      weeksOverride: raw.weeksOverride == null ? null : intIn(raw.weeksOverride, 0, 6, null),
-      weights,
+      includeCurrent: raw.includeCurrent !== false,
       characters,
     };
   }
@@ -138,12 +146,144 @@
     renderResults();
   }
 
-  function monthData() {
-    const { year, month } = parseMonth(state.month);
-    const info = P.monthInfo(year, month);
-    const weeks = state.weeksOverride ?? info.weeks.length;
-    return { info, weeks, calendar: weeks === info.weeks.length };
+  const weeksNow = () => P.remainingWeeks(today, state.includeCurrent);
+  const range = (month, w) => (w.start === w.end ? `${month}/${w.start}` : `${month}/${w.start}~${month}/${w.end}`);
+
+  /* ---------- 넥슨 Open API ---------- */
+
+  let apiKey = "";
+  try {
+    apiKey = localStorage.getItem(KEY_STORAGE) || "";
+  } catch {
+    /* 저장소를 못 쓰면 키도 이번 탭에서만 쓴다. */
   }
+
+  class NexonError extends Error {
+    constructor(code, short, message) {
+      super(message);
+      this.code = code;
+      this.short = short;
+    }
+  }
+
+  const NEXON_ERRORS = {
+    OPENAPI00001: ["넥슨 서버 오류", "넥슨 API 서버 오류입니다. 잠시 후 다시 시도하세요."],
+    OPENAPI00002: ["API 키 권한 없음", "넥슨 API 키에 권한이 없습니다. 키를 확인하세요."],
+    OPENAPI00003: ["찾지 못함", "캐릭터 식별자가 올바르지 않습니다. 이미지를 다시 불러오세요."],
+    OPENAPI00004: ["캐릭터를 찾지 못함", "캐릭터를 찾지 못했습니다. 게임 속 캐릭터 이름과 같은지 확인하세요."],
+    OPENAPI00005: ["API 키 오류", "넥슨 API 키가 올바르지 않습니다. openapi.nexon.com에서 발급한 키를 다시 넣으세요."],
+    OPENAPI00006: ["넥슨 API 오류", "넥슨 API 주소가 바뀌었습니다. 계산기를 업데이트해야 합니다."],
+    OPENAPI00007: ["호출 한도 초과", "넥슨 API 호출 한도를 넘었습니다. 잠시 후 다시 시도하세요."],
+    OPENAPI00009: ["데이터 준비 중", "넥슨 API 데이터가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요."],
+    OPENAPI00010: ["게임 점검 중", "게임 점검 중이라 캐릭터 정보를 가져올 수 없습니다."],
+    OPENAPI00011: ["API 점검 중", "넥슨 API 점검 중이라 캐릭터 정보를 가져올 수 없습니다."],
+  };
+  const KEY_ERRORS = new Set(["OPENAPI00002", "OPENAPI00005", "network"]);
+
+  async function nexonGet(path) {
+    let response;
+    try {
+      response = await fetch(`${NEXON_BASE}${path}`, { headers: { "x-nxopen-api-key": apiKey } });
+    } catch {
+      throw new NexonError("network", "연결 실패",
+        "넥슨 API에 연결하지 못했습니다. 인터넷 연결을 확인하세요. claude.ai 미리보기처럼 외부 요청을 막는 화면에서는 index.html을 브라우저로 직접 열어야 합니다.");
+    }
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const code = body?.error?.name || `HTTP ${response.status}`;
+      const [short, message] = NEXON_ERRORS[code] || ["넥슨 API 오류", `넥슨 API 오류(${code})입니다.`];
+      throw new NexonError(code, short, message);
+    }
+    return body;
+  }
+
+  /** 개발 단계 키는 초당 5건까지라 캐릭터를 하나씩(호출 2건) 차례로 불러온다. */
+  let nexonQueue = Promise.resolve();
+  const enqueue = (task) => {
+    const run = nexonQueue.then(task);
+    nexonQueue = run.catch(() => {}).then(() => wait(450));
+    return run;
+  };
+
+  /** 캐릭터 id → { state: "loading" } 또는 { state: "error", short, message }. 저장하지 않는다. */
+  const nexonStatus = new Map();
+
+  function loadCharacter(c) {
+    const name = c.name.trim();
+    if (!apiKey || !name) return Promise.resolve();
+    nexonStatus.set(c.id, { state: "loading" });
+    refreshCharacterView(c);
+    return enqueue(async () => {
+      if (c.name.trim() !== name || !state.characters.includes(c)) return;
+      try {
+        const { ocid } = await nexonGet(`/id?character_name=${encodeURIComponent(name)}`);
+        const basic = await nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`);
+        if (c.name.trim() !== name) return;
+        c.nexon = sanitizeNexon({
+          name: basic.character_name,
+          image: basic.character_image,
+          level: basic.character_level,
+          job: basic.character_class,
+          world: basic.world_name,
+          fetchedAt: Date.now(),
+        });
+        nexonStatus.delete(c.id);
+        save();
+      } catch (error) {
+        const known = error instanceof NexonError;
+        nexonStatus.set(c.id, { state: "error", short: known ? error.short : "불러오기 실패", message: error.message });
+        if (known && KEY_ERRORS.has(error.code)) setApiMessage(error.message, true);
+      }
+      refreshCharacterView(c);
+      renderResults();
+    });
+  }
+
+  async function loadAll(characters) {
+    if (!characters.length) {
+      setApiMessage("키를 저장했습니다. 캐릭터를 추가하면 이미지를 불러옵니다.");
+      return;
+    }
+    setApiMessage(`캐릭터 ${characters.length}명의 정보를 불러오는 중입니다.`);
+    await Promise.all(characters.map(loadCharacter));
+    const failed = characters.filter((c) => nexonStatus.get(c.id)?.state === "error").length;
+    if (!failed) setApiMessage(`캐릭터 ${characters.length}명의 정보를 불러왔습니다.`);
+    else if (failed < characters.length) setApiMessage(`${characters.length - failed}명을 불러오고 ${failed}명은 실패했습니다. 실패한 캐릭터는 이름 아래에 이유가 나옵니다.`, true);
+  }
+
+  function setApiMessage(text, bad = false) {
+    const node = $("#api-message");
+    node.textContent = text;
+    node.classList.toggle("bad", bad);
+  }
+
+  function renderApiState() {
+    const badge = $("#api-state");
+    badge.textContent = apiKey ? "저장됨" : "없음";
+    badge.className = `api-state ${apiKey ? "on" : "off"}`;
+    $("#api-key").placeholder = apiKey ? "저장된 키가 있습니다. 바꾸려면 새 키를 넣으세요" : "test_ 또는 live_로 시작하는 키";
+    $("#api-refresh").disabled = !apiKey;
+    $("#api-clear").disabled = !apiKey;
+  }
+
+  /** 넥슨 캐릭터 이미지(96×96, 투명 배경). 없으면 이름 첫 글자. */
+  function avatar(c, size) {
+    const image = c.nexon?.image;
+    const box = h("span", { class: `avatar avatar-${size}${image ? "" : " avatar-empty"}`, "aria-hidden": "true" });
+    if (image) {
+      const img = h("img", { src: image, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+      img.addEventListener("error", () => {
+        box.classList.add("avatar-empty");
+        box.replaceChildren(c.name.trim().charAt(0) || "?");
+      });
+      box.append(img);
+    } else {
+      box.append(c.name.trim().charAt(0) || "?");
+    }
+    return box;
+  }
+
+  const metaText = (c) => (c.nexon ? [`Lv.${c.nexon.level}`, c.nexon.job, c.nexon.world].filter(Boolean).join(" · ") : "");
 
   /* ---------- 공용 입력 ---------- */
 
@@ -151,7 +291,7 @@
    * 숫자 + 위/아래 화살표. 위 화살표는 +1, 아래 화살표는 −1. 입력 칸에서 키보드 ↑↓도 같다.
    * @returns {{node: HTMLElement, set: (value:number) => void}}
    */
-  function stepper({ id, label, value, min, max, onChange, size }) {
+  function stepper({ id, label, value, min, max, onChange }) {
     let current = value;
     const input = h("input", { id, class: "stepper-input", inputmode: "numeric", autocomplete: "off", "aria-label": label, value: String(value) });
     const up = h("button", { type: "button", class: "stepper-btn", "aria-label": `${label} 1 늘리기`, tabindex: "-1" }, upIcon());
@@ -182,15 +322,11 @@
     });
     input.addEventListener("blur", () => set(input.value.replace(/\D/g, "") || min));
     sync();
-    const node = h("div", { class: `stepper${size ? ` stepper-${size}` : ""}` }, input, h("div", { class: "stepper-arrows" }, up, down));
+    const node = h("div", { class: "stepper" }, input, h("div", { class: "stepper-arrows" }, up, down));
     return { node, set: (n) => set(n, { silent: true }) };
   }
 
-  const LEVEL_OPTIONS = [
-    ["auto", "자동"],
-    ["0", "안 씀"],
-    ...[1, 2, 3, 4, 5].map((level) => [String(level), `${level}단계`]),
-  ];
+  const LEVEL_OPTIONS = [["auto", "자동"], ["0", "안 씀"], ...[1, 2, 3, 4, 5].map((level) => [String(level), `${level}단계`])];
   const levelValue = (fixed) => (fixed == null ? "auto" : String(fixed));
   const parseLevel = (value) => (value === "auto" ? null : Number(value));
 
@@ -202,10 +338,7 @@
     return select;
   }
 
-  /* ---------- 이번 달 조건 ---------- */
-
-  let weeksControl = null;
-  const weightControls = {};
+  /* ---------- 이번 달 획득 코인 ---------- */
 
   function renderSetup() {
     const coins = $("#coins");
@@ -218,77 +351,23 @@
       coins.value = fmt(state.coins);
     });
 
-    const select = $("#month");
-    const today = kstToday();
-    const options = [];
-    for (let delta = -1; delta <= 4; delta++) {
-      const m = shiftMonth(today, delta);
-      const key = monthKey(m.year, m.month);
-      options.push(h("option", { value: key }, `${m.year}년 ${m.month}월${delta === 0 ? " (이번 달)" : delta === 1 ? " (다음 달)" : ""}`));
-    }
-    if (!options.some((o) => o.value === state.month)) {
-      const m = parseMonth(state.month);
-      options.unshift(h("option", { value: state.month }, `${m.year}년 ${m.month}월`));
-    }
-    select.replaceChildren(...options);
-    select.value = state.month;
-    select.addEventListener("change", () => {
-      state.month = select.value;
-      state.weeksOverride = null;
-      weeksControl.set(monthData().weeks);
+    const include = $("#include-current");
+    include.checked = state.includeCurrent;
+    include.addEventListener("change", () => {
+      state.includeCurrent = include.checked;
       touch();
     });
-
-    weeksControl = stepper({
-      id: "weeks",
-      label: "주 수",
-      value: monthData().weeks,
-      min: 0,
-      max: 6,
-      onChange: (value) => {
-        state.weeksOverride = value === monthData().info.weeks.length ? null : value;
-        touch();
-      },
-    });
-    $("#weeks-slot").replaceChildren(weeksControl.node);
-
-    const grid = $("#weights");
-    for (const key of P.TIE_ORDER) {
-      const stat = statOf(key);
-      const control = stepper({
-        id: `weight-${key}`,
-        label: `${stat.short} 가치`,
-        value: state.weights[key],
-        min: 0,
-        max: MAX_WEIGHT,
-        size: "sm",
-        onChange: (value) => {
-          state.weights[key] = value;
-          renderPresetButtons();
-          touch();
-        },
-      });
-      weightControls[key] = control;
-      grid.append(h("div", { class: "weight" }, h("label", { for: `weight-${key}` }, stat.short), control.node));
-    }
-    for (const button of document.querySelectorAll("[data-preset]")) {
-      button.addEventListener("click", () => {
-        state.weights = { ...P.WEIGHT_PRESETS[button.dataset.preset].weights };
-        for (const key of P.STAT_KEYS) weightControls[key].set(state.weights[key]);
-        renderPresetButtons();
-        touch();
-      });
-    }
-    renderPresetButtons();
 
     $("#add-form").addEventListener("submit", (event) => {
       event.preventDefault();
       const input = $("#new-name");
-      const name = input.value.trim() || `캐릭터 ${state.characters.length + 1}`;
-      state.characters.push({ id: uid(), name: name.slice(0, 20), weekly: 1, fixed: emptyFixed() });
+      const typed = input.value.trim().slice(0, 20);
+      const c = { id: uid(), name: typed || `캐릭터 ${state.characters.length + 1}`, weekly: 1, fixed: emptyFixed(), nexon: null };
+      state.characters.push(c);
       input.value = "";
       renderCharacters();
       touch();
+      if (typed) loadCharacter(c);
     });
 
     $("#clear-example").addEventListener("click", () => {
@@ -298,13 +377,52 @@
       touch();
       $("#coins").focus();
     });
+
+    $("#api-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const input = $("#api-key");
+      const key = input.value.trim();
+      if (!key) {
+        setApiMessage("넥슨 Open API 키를 넣으세요.", true);
+        return;
+      }
+      apiKey = key;
+      try {
+        localStorage.setItem(KEY_STORAGE, key);
+      } catch {
+        /* 이번 탭에서만 쓴다. */
+      }
+      input.value = "";
+      renderApiState();
+      loadAll(state.characters.filter((c) => c.name.trim()));
+    });
+    $("#api-refresh").addEventListener("click", () => loadAll(state.characters.filter((c) => c.name.trim())));
+    $("#api-clear").addEventListener("click", () => {
+      apiKey = "";
+      try {
+        localStorage.removeItem(KEY_STORAGE);
+      } catch {
+        /* 없으면 그만이다. */
+      }
+      renderApiState();
+      setApiMessage("키를 지웠습니다. 이미 불러온 이미지는 남아 있습니다.");
+    });
+    renderApiState();
   }
 
-  function renderPresetButtons() {
-    for (const button of document.querySelectorAll("[data-preset]")) {
-      const preset = P.WEIGHT_PRESETS[button.dataset.preset].weights;
-      button.setAttribute("aria-pressed", String(P.STAT_KEYS.every((key) => preset[key] === state.weights[key])));
-    }
+  function renderWeeks() {
+    const all = P.remainingWeeks(today, true);
+    const used = weeksNow();
+    const current = all.weeks[0];
+    $("#today-label").textContent = `오늘 ${today.month}월 ${today.day}일(${WEEKDAYS[today.weekday]}) 기준 이번 달 남은 주`;
+    $("#weeks-count").textContent = `${used.weeks.length}주`;
+    $("#week-chips").replaceChildren(...all.weeks.map((w) => {
+      const off = w.current && !state.includeCurrent;
+      return h("li", { class: `week-chip${w.current ? " is-current" : ""}${off ? " is-off" : ""}` },
+        range(all.month, w),
+        w.current ? h("span", { class: "week-tag" }, off ? "빼고 계산" : "이번 주") : null);
+    }));
+    $("#include-current-label").textContent = `이번 주(${range(all.month, current)})에도 쓸 수 있음`;
   }
 
   function renderExampleNote() {
@@ -313,9 +431,23 @@
 
   /* ---------- 캐릭터 ---------- */
 
+  /** 캐릭터 id → 편집 줄의 이미지·정보 칸. 이름을 치는 동안 줄 전체를 다시 그리지 않고 이 칸만 바꾼다. */
+  const rowViews = new Map();
+
+  function refreshCharacterView(c) {
+    const view = rowViews.get(c.id);
+    if (!view) return;
+    view.avatar.replaceChildren(avatar(c, "md"));
+    const status = nexonStatus.get(c.id);
+    view.meta.className = `char-meta${status?.state === "error" ? " bad" : ""}`;
+    view.meta.textContent = status?.state === "loading" ? "불러오는 중…" : status?.state === "error" ? status.short : metaText(c);
+    view.meta.title = status?.state === "error" ? status.message : "";
+  }
+
   function renderCharacters() {
     const list = $("#char-list");
     list.replaceChildren();
+    rowViews.clear();
     if (!state.characters.length) {
       list.append(h("p", { class: "empty" }, "아직 캐릭터가 없습니다. 위 칸에 이름을 넣고 캐릭터 추가를 누르세요."));
       return;
@@ -328,7 +460,10 @@
         h("span", null, "한 번에"),
         h("span", null, "")),
     );
-    state.characters.forEach((c) => list.append(charRow(c)));
+    for (const c of state.characters) {
+      list.append(charRow(c));
+      refreshCharacterView(c);
+    }
   }
 
   function charRow(c) {
@@ -345,10 +480,22 @@
       value: c.name,
       maxlength: "20",
       autocomplete: "off",
+      spellcheck: "false",
       "aria-label": "캐릭터 이름",
       oninput: (event) => {
         c.name = event.target.value;
         touch();
+      },
+      onchange: () => {
+        // 이름이 바뀌면 예전 이미지는 다른 캐릭터의 것이다.
+        if (c.nexon && c.nexon.name !== c.name.trim()) {
+          c.nexon = null;
+          nexonStatus.delete(c.id);
+          save();
+          refreshCharacterView(c);
+          renderResults();
+        }
+        if (!c.nexon) loadCharacter(c);
       },
     });
     const weekly = stepper({
@@ -393,13 +540,18 @@
       title: "삭제",
       onclick: () => {
         state.characters = state.characters.filter((x) => x !== c);
+        nexonStatus.delete(c.id);
         renderCharacters();
         touch();
       },
     }, removeIcon());
 
+    const avatarSlot = h("span", { class: "avatar-slot" });
+    const meta = h("span", { class: "char-meta" });
+    rowViews.set(c.id, { avatar: avatarSlot, meta });
+
     return h("div", { class: "char-row" },
-      h("div", { class: "c-name" }, name),
+      h("div", { class: "c-name" }, avatarSlot, h("div", { class: "c-name-text" }, name, meta)),
       h("div", { class: "c-weekly cell" }, h("label", { class: "cell-label", for: `weekly-${c.id}` }, "주간 사용"), weekly.node),
       h("div", { class: "c-stats" }, cells),
       h("div", { class: "c-all cell" }, h("label", { class: "cell-label", for: `fix-all-${c.id}` }, "한 번에"), allSelect),
@@ -410,46 +562,35 @@
   /* ---------- 결과 ---------- */
 
   function renderResults() {
-    const { info, weeks, calendar } = monthData();
-    const plan = P.buildPlan({ coins: state.coins, weeks, weights: state.weights, characters: state.characters });
-    renderWeeksHint(info, weeks, calendar);
+    const weeks = weeksNow();
+    const plan = P.buildPlan({ coins: state.coins, weeks: weeks.weeks.length, characters: state.characters });
+    const rows = P.buildSchedule(plan);
+    renderWeeks();
     renderStatus(plan);
     renderSummary(plan);
     renderPlanTable(plan);
     renderNext(plan);
-    renderSchedule(plan, P.buildSchedule(plan), info, calendar);
-    renderFormula(plan, weeks);
-  }
-
-  function renderWeeksHint(info, weeks, calendar) {
-    $("#month-hint").textContent = `${info.days}일 · 목요일(주간 초기화) ${info.weeks.length}번`;
-    const hint = $("#weeks-hint");
-    if (calendar) {
-      hint.replaceChildren(`${info.month}월에 시작하는 주 ${info.weeks.length}개로 계산합니다.`);
-    } else {
-      const reset = h("button", { type: "button", class: "link-btn", onclick: () => {
-        state.weeksOverride = null;
-        weeksControl.set(info.weeks.length);
-        touch();
-      } }, `달력대로 ${info.weeks.length}주`);
-      hint.replaceChildren(`직접 정한 ${weeks}주로 계산합니다. `, reset);
-    }
+    renderSchedule(plan, rows, weeks);
+    renderDetails(plan, rows, weeks);
   }
 
   const activeChars = (plan) => plan.chars.filter((c) => c.uses > 0);
+  /** 화면 상태(state)의 캐릭터. plan.chars와 순서가 같다. */
+  const sourceOf = (index) => state.characters[index];
 
   function renderStatus(plan) {
     const chip = $("#status-chip");
     let tone = "neutral";
     let text;
     if (!plan.chars.length) text = "캐릭터를 추가하세요";
+    else if (!plan.weeks) text = "이번 달 남은 주가 없습니다";
     else if (!plan.totalUses) text = "사용 횟수가 0입니다";
     else if (plan.shortfall) {
       tone = "bad";
       text = `고정 단계가 ${fmt(plan.shortfall)}코인 넘침`;
     } else if (plan.maxed) {
       tone = "good";
-      text = `모두 5단계 · ${fmt(plan.leftover)}코인 남음`;
+      text = plan.leftover ? `모두 5단계 · ${fmt(plan.leftover)}코인 남음` : "모두 5단계 · 남는 코인 없음";
     } else if (!plan.autoSlots) {
       tone = "good";
       text = `고정 단계만 사용 · ${fmt(plan.leftover)}코인 남음`;
@@ -466,12 +607,12 @@
     const pct = (n) => `${(Math.max(0, n) / base) * 100}%`;
     const over = plan.used > plan.coins;
     const tiles = [
-      { label: "월간 코인", value: fmt(plan.coins), sub: `${plan.weeks}주 기준` },
+      { label: "이번 달 코인", value: fmt(plan.coins), sub: `남은 ${plan.weeks}주` },
       { label: "쓰는 코인", value: fmt(plan.used), sub: `고정 ${fmt(plan.fixedCoins)} · 자동 ${fmt(plan.autoCoins)}` },
       over
         ? { label: "모자란 코인", value: fmt(-plan.leftover), sub: "고정 단계를 낮추거나 횟수를 줄이세요", tone: "bad" }
         : { label: "남는 코인", value: fmt(plan.leftover), sub: plan.leftover && !plan.maxed && plan.autoSlots ? "한 단계를 더 올리기엔 모자람" : "" },
-      { label: "월 사용 횟수", value: `${fmt(plan.totalUses)}회`, sub: `캐릭터 ${activeChars(plan).length}명` },
+      { label: "사용 횟수", value: `${fmt(plan.totalUses)}회`, sub: `캐릭터 ${activeChars(plan).length}명` },
     ];
     $("#summary").replaceChildren(
       h("div", { class: "tiles" }, tiles.map((t) =>
@@ -479,7 +620,7 @@
           h("span", { class: "tile-label" }, t.label),
           h("span", { class: "tile-value" }, t.value),
           t.sub ? h("span", { class: "tile-sub" }, t.sub) : null))),
-      h("div", { class: "coin-bar", role: "img", "aria-label": `월간 코인 ${fmt(plan.coins)} 중 고정 ${fmt(plan.fixedCoins)}, 자동 ${fmt(plan.autoCoins)}, 남음 ${fmt(Math.max(0, plan.leftover))}` },
+      h("div", { class: "coin-bar", role: "img", "aria-label": `이번 달 코인 ${fmt(plan.coins)} 중 고정 ${fmt(plan.fixedCoins)}, 자동 ${fmt(plan.autoCoins)}, 남음 ${fmt(Math.max(0, plan.leftover))}` },
         h("span", { class: "seg seg-fixed", style: `width:${pct(plan.fixedCoins)}` }),
         h("span", { class: "seg seg-auto", style: `width:${pct(plan.autoCoins)}` }),
         h("span", { class: "seg seg-left", style: `width:${pct(plan.leftover)}` }),
@@ -488,7 +629,7 @@
         h("span", null, h("i", { class: "sw sw-fixed" }), "고정"),
         h("span", null, h("i", { class: "sw sw-auto" }), "자동 배분"),
         h("span", null, h("i", { class: "sw sw-left" }), "남음"),
-        over ? h("span", null, h("i", { class: "sw sw-limit" }), "월간 코인 한도") : null),
+        over ? h("span", null, h("i", { class: "sw sw-limit" }), "이번 달 코인 한도") : null),
     );
   }
 
@@ -497,19 +638,31 @@
       [1, 2, 3, 4, 5].map((i) => h("i", { class: i <= stat.level ? "on" : stat.up && i === stat.level + 1 ? "half" : null })));
   }
 
-  function levelCell(stat) {
+  /** 월간 플랜 칸. 한 단계 위로 쓰는 횟수가 있으면 "2~3단계"와 단계별 횟수를 함께 적는다. */
+  function levelCell(stat, uses) {
     const off = stat.level === 0 && !stat.up;
+    const label = off ? "안 씀" : stat.up ? `${stat.level}~${stat.level + 1}단계` : `${stat.level}단계`;
+    const split = stat.up
+      ? [`${stat.level + 1}단계 ${stat.up}회`, stat.level ? `${stat.level}단계 ${uses - stat.up}회` : `안 씀 ${uses - stat.up}회`].join(" · ")
+      : null;
     return h("td", { class: "lv" },
       h("div", { class: "lv-top" },
-        h("span", { class: `lv-num${off ? " lv-off" : ""}` }, off ? "안 씀" : stat.level ? `${stat.level}단계` : "0단계"),
+        h("span", { class: `lv-num${off ? " lv-off" : ""}` }, label),
         h("span", { class: `tag tag-${stat.mode}` }, stat.mode === "fixed" ? "고정" : "자동")),
       pips(stat),
-      stat.up ? h("div", { class: "lv-up" }, `${stat.level + 1}단계 ${stat.up}회`) : null);
+      split ? h("div", { class: "lv-up" }, split) : null);
   }
 
   function effectText(c) {
     const parts = P.STATS.filter((s) => c.stats[s.key].level > 0).map((s) => `${s.short} ${P.statText(s.key, c.stats[s.key].level)}`);
     return parts.length ? parts.join(" · ") : "능력치 없음";
+  }
+
+  function whoCell(index, sub) {
+    const source = sourceOf(index);
+    return h("th", { scope: "row" },
+      h("div", { class: "who" }, avatar(source, "sm"),
+        h("div", { class: "who-text" }, h("span", { class: "who-name" }, nameOf(source)), sub ? h("span", { class: "effect" }, sub) : null)));
   }
 
   function renderPlanTable(plan) {
@@ -520,24 +673,24 @@
     }
     const head = h("tr", null,
       h("th", { scope: "col" }, "캐릭터"),
-      h("th", { scope: "col", class: "num" }, "월 사용"),
+      h("th", { scope: "col", class: "num" }, "사용"),
       P.STATS.map((s) => h("th", { scope: "col" }, s.short)),
       h("th", { scope: "col", class: "num" }, "1회 코인"),
       h("th", { scope: "col", class: "num" }, "월 코인"));
-    const rows = plan.chars.map((c) => {
+    const rows = plan.chars.map((c, index) => {
       if (!c.uses) {
         return h("tr", { class: "row-idle" },
-          h("th", { scope: "row" }, h("span", { class: "who" }, c.name || "이름 없음"), h("span", { class: "effect" }, "이번 달 사용 안 함")),
+          whoCell(index, "이번 달 사용 안 함"),
           h("td", { class: "num" }, "0회"),
-          h("td", { colspan: String(P.STATS.length), class: "muted" }, "주간 사용 횟수를 1 이상으로 올리면 계산합니다."),
+          h("td", { colspan: String(P.STATS.length), class: "muted" }, plan.weeks ? "주간 사용 횟수를 1 이상으로 올리면 계산합니다." : "이번 달 남은 주가 없습니다."),
           h("td", { class: "num" }, "—"),
           h("td", { class: "num" }, "0"));
       }
       return h("tr", null,
-        h("th", { scope: "row" }, h("span", { class: "who" }, c.name || "이름 없음"), h("span", { class: "effect" }, effectText(c))),
+        whoCell(index, effectText(c)),
         h("td", { class: "num" }, `${fmt(c.uses)}회`, h("span", { class: "sub" }, `주 ${c.weekly}회`)),
-        P.STATS.map((s) => levelCell(c.stats[s.key])),
-        h("td", { class: "num" }, fmt(c.perUse), c.upCoins ? h("span", { class: "sub" }, `+${fmt(c.upCoins)} (위 단계)`) : null),
+        P.STATS.map((s) => levelCell(c.stats[s.key], c.uses)),
+        h("td", { class: "num" }, fmt(c.perUse), c.upCoins ? h("span", { class: "sub" }, `위 단계 +${fmt(c.upCoins)}`) : null),
         h("td", { class: "num strong" }, fmt(c.monthly)));
     });
     const foot = h("tr", null,
@@ -554,10 +707,10 @@
   function renderNext(plan) {
     const target = $("#next-hint");
     if (plan.shortfall) {
-      target.textContent = "고정한 단계만으로 월간 코인을 넘어서 자동 칸은 모두 0단계로 두었습니다.";
+      target.textContent = "고정한 단계만으로 이번 달 코인을 넘어서 자동 칸은 모두 0단계로 두었습니다.";
     } else if (plan.next) {
-      const c = plan.chars[plan.next.charIndex];
-      target.textContent = `다음으로 올릴 칸은 ${c.name || "이름 없음"}의 ${statOf(plan.next.key).short} ${plan.next.level}단계(1회 +${fmt(plan.next.step)}코인)입니다. 코인이 ${fmt(plan.next.missing)}개 더 있으면 1회를 올릴 수 있습니다.`;
+      const c = sourceOf(plan.next.charIndex);
+      target.textContent = `다음으로 올릴 칸은 ${nameOf(c)}의 ${statOf(plan.next.key).short} ${plan.next.level}단계(1회 +${fmt(plan.next.step)}코인)입니다. 코인이 ${fmt(plan.next.missing)}개 더 있으면 1회를 올릴 수 있습니다.`;
     } else if (plan.maxed && plan.leftover > 0) {
       target.textContent = `자동 칸이 모두 5단계라 ${fmt(plan.leftover)}코인이 남습니다. 주간 사용 횟수를 늘리거나 캐릭터를 추가해도 됩니다.`;
     } else {
@@ -565,119 +718,111 @@
     }
   }
 
-  function renderSchedule(plan, rows, info, calendar) {
+  /** 그 주에 기본 단계보다 한 단계 위로 쓰는 능력치. "보뎀 5단계". */
+  const upgradesOf = (char, levels) => P.STAT_KEYS.filter((key) => levels[key] > char.stats[key].level).map((key) => `${statOf(key).short} ${levels[key]}단계`);
+
+  function weekLabel(weeks, row) {
+    const w = weeks.weeks[row.week - 1];
+    return h("th", { scope: "row", class: "week-cell" },
+      h("span", { class: "week-name" }, `${row.week}주차`),
+      h("span", { class: "week-range" }, range(weeks.month, w)),
+      w.current ? h("span", { class: "week-tag" }, "이번 주") : null);
+  }
+
+  function renderSchedule(plan, rows, weeks) {
     const target = $("#schedule");
-    const chars = activeChars(plan);
-    if (!chars.length || !rows.length) {
-      target.replaceChildren(h("p", { class: "empty" }, "사용할 캐릭터와 주 수가 있으면 주차별 코인이 여기에 나옵니다."));
+    const indices = plan.chars.map((c, i) => (c.uses ? i : -1)).filter((i) => i >= 0);
+    if (!indices.length || !rows.length) {
+      target.replaceChildren(h("p", { class: "empty" }, "사용할 캐릭터와 남은 주가 있으면 주차별 코인이 여기에 나옵니다."));
       return;
     }
-    const indices = plan.chars.map((c, i) => (c.uses ? i : -1)).filter((i) => i >= 0);
-    const period = (week) => {
-      if (!calendar) return "—";
-      const w = info.weeks[week - 1];
-      return w.start === w.end ? `${info.month}/${w.start}` : `${info.month}/${w.start}~${info.month}/${w.end}`;
-    };
     const head = h("tr", null,
       h("th", { scope: "col" }, "주차"),
-      h("th", { scope: "col" }, "기간"),
-      indices.map((i) => h("th", { scope: "col", class: "num" }, plan.chars[i].name || "이름 없음")),
-      h("th", { scope: "col", class: "num" }, "주 합계"),
-      h("th", { scope: "col", class: "num" }, "남은 코인"));
+      indices.map((i) => h("th", { scope: "col", class: "num" },
+        h("span", { class: "col-who" }, avatar(sourceOf(i), "xs"), nameOf(sourceOf(i))))),
+      h("th", { scope: "col", class: "num" }, "주 코인"),
+      h("th", { scope: "col", class: "num" }, "누적"),
+      h("th", { scope: "col" }, "남은 코인"));
     const body = rows.map((row) =>
       h("tr", null,
-        h("th", { scope: "row" }, `${row.week}주차`),
-        h("td", { class: "muted" }, period(row.week)),
+        weekLabel(weeks, row),
         indices.map((i) => {
           const cell = row.cells[i];
+          const char = plan.chars[i];
+          const ups = [...new Set(cell.groups.flatMap((g) => upgradesOf(char, g.levels)))];
           return h("td", { class: "num" },
-            fmt(cell.coins),
-            h("span", { class: "sub" }, `${cell.uses}회`),
-            cell.ups.map((u) => h("span", { class: "sub up" }, `${statOf(u.key).short} ${u.level}단계 ${u.count}회`)));
+            h("span", { class: "strong" }, fmt(cell.coins)),
+            h("span", { class: "sub" }, cell.groups.map((g) => `${fmt(g.perUse)} × ${g.count}회`).join(" + ")),
+            ups.length ? h("span", { class: "sub up" }, `${ups.join(", ")} ↑`) : null);
         }),
-        h("td", { class: "num strong" }, fmt(row.coins)),
-        h("td", { class: `num${row.remaining < 0 ? " bad" : ""}` }, fmt(row.remaining))));
+        h("td", { class: "num strong" }, fmt(row.coins), h("span", { class: "sub" }, `${row.uses}회`)),
+        h("td", { class: "num" }, fmt(row.cumulative)),
+        h("td", { class: "left-cell" },
+          h("span", { class: `left-num${row.remaining < 0 ? " bad" : ""}` }, fmt(row.remaining)),
+          h("span", { class: "left-bar", "aria-hidden": "true" },
+            h("i", { style: `width:${plan.coins ? Math.max(0, Math.min(100, (row.remaining / plan.coins) * 100)) : 0}%` })))));
     target.replaceChildren(
-      h("div", { class: "table-scroll" }, h("table", { class: "grid-table" }, h("thead", null, head), h("tbody", null, body))),
-      h("p", { class: "hint" },
-        calendar
-          ? "목요일 0시 주간 초기화 기준입니다. 마지막 주는 다음 달 1일 0시 코인 초기화 전까지만 셉니다. "
-          : "",
-        "한 단계 위로 쓰는 횟수는 레이드로 코인이 쌓인 달 후반에 두었습니다. 남은 코인은 월간 코인을 달 초에 모두 가졌다고 보고 뺀 값입니다."),
-    );
+      h("div", { class: "table-scroll" }, h("table", { class: "grid-table schedule-table" }, h("thead", null, head), h("tbody", null, body))));
   }
 
-  function formulaStep(title, equation, lines) {
-    return h("li", null,
-      h("h3", null, title),
-      h("div", { class: "eq" }, h("code", null, equation), lines.length ? h("div", { class: "eq-lines" }, lines.map((line) => h("code", null, line))) : null));
-  }
-
-  function renderFormula(plan, weeks) {
-    const target = $("#formula");
-    if (!plan.chars.length) {
-      target.replaceChildren(h("p", { class: "empty" }, "캐릭터를 추가하면 실제 숫자로 계산 과정을 보여 줍니다."));
+  function renderDetails(plan, rows, weeks) {
+    const target = $("#details");
+    const active = plan.chars.map((c, i) => [c, i]).filter(([c]) => c.uses > 0);
+    if (!active.length || !rows.length) {
+      target.replaceChildren(h("p", { class: "empty" }, "사용할 캐릭터와 남은 주가 있으면 캐릭터마다 주차별 단계가 여기에 나옵니다."));
       return;
     }
-    const steps = [];
-
-    steps.push(formulaStep("월 사용 횟수", `월 사용 횟수 = 주간 사용 횟수 × 주 수(${weeks})`, [
-      ...plan.chars.map((c) => `${c.name || "이름 없음"}  ${c.weekly} × ${weeks} = ${fmt(c.uses)}회`),
-      `합계  ${fmt(plan.totalUses)}회`,
-    ]));
-
-    const fixedLines = [];
-    for (const c of plan.chars) {
-      const fixed = P.STATS.filter((s) => c.stats[s.key].mode === "fixed");
-      if (!fixed.length) continue;
-      const parts = fixed.map((s) => {
-        const level = c.stats[s.key].level;
-        return level ? `${s.short} ${level}단계 ${fmt(P.LEVEL_COST[level])}` : `${s.short} 안 씀 0`;
-      });
-      fixedLines.push(`${c.name || "이름 없음"}  ${parts.join(" + ")} = ${fmt(c.fixedPerUse)} × ${fmt(c.uses)}회 = ${fmt(c.fixedPerUse * c.uses)}`);
-    }
-    fixedLines.push(fixedLines.length ? `합계  ${fmt(plan.fixedCoins)}` : "고정한 칸이 없습니다  0");
-    steps.push(formulaStep("고정 코인", "고정 코인 = (고정한 단계의 1회 코인 합) × 월 사용 횟수", fixedLines));
-
-    steps.push(formulaStep("자동 배분 코인", "자동 배분 코인 = 월간 코인 − 고정 코인",
-      plan.shortfall
-        ? [`${fmt(plan.coins)} − ${fmt(plan.fixedCoins)} = −${fmt(plan.shortfall)}  →  모자라서 0`]
-        : [`${fmt(plan.coins)} − ${fmt(plan.fixedCoins)} = ${fmt(plan.autoBudget)}`]));
-
-    const even = P.STAT_KEYS.every((key) => state.weights[key] === state.weights[P.STAT_KEYS[0]]);
-    const order = even
-      ? "가치가 모두 같아 1단계에 드는 코인이 싼 단계부터 채웁니다. 같은 단계 안에서는 보뎀 → 방무 → 공/마 → 크뎀 → 올스탯, 위쪽 캐릭터 순서입니다."
-      : `가치 ÷ (그 단계로 올리는 코인)이 큰 칸부터 채웁니다. 가치 ${P.TIE_ORDER.map((key) => `${statOf(key).short} ${state.weights[key]}`).join(" · ")}`;
-    const levelLines = plan.levels
-      .filter((row) => row.slots)
-      .map((row) => `${row.level}단계 (+${row.step})  ${fmt(row.filled)} / ${fmt(row.slots)}칸·회 × ${row.step} = ${fmt(row.coins)}`);
-    if (levelLines.length) levelLines.push(`합계  ${fmt(plan.autoCoins)}`);
-    else levelLines.push("자동 칸이 없습니다  0");
-    steps.push(formulaStep("자동 칸 채우기", "칸·회 = 자동 칸(캐릭터 × 능력치) 하나를 한 번 쓰는 것. 단계를 올릴 때 더 드는 코인: 1단계 50 · 2단계 75 · 3단계 75 · 4단계 100 · 5단계 200", [order, ...levelLines]));
-
-    steps.push(formulaStep("남는 코인", "남는 코인 = 월간 코인 − 고정 코인 − 자동 배분에 쓴 코인", [
-      `${fmt(plan.coins)} − ${fmt(plan.fixedCoins)} − ${fmt(plan.autoCoins)} = ${plan.leftover < 0 ? "−" : ""}${fmt(Math.abs(plan.leftover))}`,
-    ]));
-
-    target.replaceChildren(h("ol", { class: "formula" }, steps));
+    target.replaceChildren(...active.map(([char, index]) => detailCard(char, index, rows, weeks)));
   }
 
-  function renderReference() {
+  function detailCard(char, index, rows, weeks) {
+    const source = sourceOf(index);
     const head = h("tr", null,
-      h("th", { scope: "col" }, "단계"),
+      h("th", { scope: "col" }, "주차"),
+      h("th", { scope: "col", class: "num" }, "횟수"),
+      P.STATS.map((s) => h("th", { scope: "col", class: "num" }, s.short)),
       h("th", { scope: "col", class: "num" }, "1회 코인"),
-      h("th", { scope: "col", class: "num" }, "앞 단계보다"),
-      h("th", { scope: "col", class: "num" }, "1단계당 평균"),
-      P.STATS.map((s) => h("th", { scope: "col", class: "num" }, s.short)));
-    const rows = [1, 2, 3, 4, 5].map((level) =>
-      h("tr", null,
-        h("th", { scope: "row" }, `${level}단계`),
-        h("td", { class: "num strong" }, fmt(P.LEVEL_COST[level])),
-        h("td", { class: "num" }, `+${fmt(P.stepCost(level - 1))}`),
-        h("td", { class: "num" }, fmt(Math.round((P.LEVEL_COST[level] / level) * 10) / 10)),
-        P.STATS.map((s) => h("td", { class: "num" }, P.statText(s.key, level)))));
-    $("#reference").replaceChildren(
-      h("div", { class: "table-scroll" }, h("table", { class: "grid-table ref-table" }, h("thead", null, head), h("tbody", null, rows))));
+      h("th", { scope: "col", class: "num" }, "주 코인"));
+    const body = [];
+    for (const row of rows) {
+      const cell = row.cells[index];
+      cell.groups.forEach((group, g) => {
+        const label = weekLabel(weeks, row);
+        if (cell.groups.length > 1) label.setAttribute("rowspan", String(cell.groups.length));
+        body.push(h("tr", { class: g ? "group-next" : null },
+          g ? null : label,
+          h("td", { class: "num" }, `${group.count}회`),
+          P.STATS.map((s) => {
+            const level = group.levels[s.key];
+            const fixed = char.stats[s.key].mode === "fixed";
+            const up = level > char.stats[s.key].level;
+            return h("td", { class: `num stat${fixed ? " is-fixed" : ""}${up ? " is-up" : ""}${level ? "" : " is-off"}` },
+              level ? `${level}단계` : "안 씀",
+              level ? h("span", { class: "sub" }, P.statText(s.key, level)) : null);
+          }),
+          h("td", { class: "num" }, fmt(group.perUse)),
+          g ? null : h("td", { class: "num strong", rowspan: cell.groups.length > 1 ? String(cell.groups.length) : null }, fmt(cell.coins))));
+      });
+    }
+    const foot = h("tr", null,
+      h("th", { scope: "row" }, "합계"),
+      h("td", { class: "num" }, `${fmt(char.uses)}회`),
+      h("td", { colspan: String(P.STATS.length) }),
+      h("td", { class: "num" }),
+      h("td", { class: "num strong" }, fmt(char.monthly)));
+    const fixedNames = P.STATS.filter((s) => char.stats[s.key].mode === "fixed").map((s) => s.short);
+    return h("article", { class: "char-card" },
+      h("header", { class: "char-card-head" },
+        avatar(source, "lg"),
+        h("div", { class: "char-card-title" },
+          h("h3", null, nameOf(source)),
+          h("span", { class: "char-meta" }, metaText(source) || (apiKey ? "" : "넥슨 API 키를 넣으면 이미지·레벨·직업이 나옵니다")),
+          h("span", { class: "char-card-sub" },
+            `주 ${char.weekly}회 · 이번 달 ${char.uses}회`,
+            fixedNames.length ? ` · 고정 ${fixedNames.join(", ")}` : "")),
+        h("div", { class: "char-card-total" }, h("span", null, "이번 달 코인"), h("strong", null, fmt(char.monthly)))),
+      h("div", { class: "table-scroll" },
+        h("table", { class: "grid-table detail-table" }, h("thead", null, head), h("tbody", null, body), h("tfoot", null, foot))));
   }
 
   /* ---------- 시작 ---------- */
@@ -685,6 +830,10 @@
   renderSetup();
   renderExampleNote();
   renderCharacters();
-  renderReference();
   renderResults();
+
+  if (apiKey && !state.example) {
+    const stale = state.characters.filter((c) => c.name.trim() && (!c.nexon || Date.now() - c.nexon.fetchedAt > NEXON_STALE_MS));
+    if (stale.length) loadAll(stale);
+  }
 })();

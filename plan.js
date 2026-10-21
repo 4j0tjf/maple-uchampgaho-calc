@@ -27,18 +27,8 @@
   ];
   const STAT_KEYS = STATS.map((s) => s.key);
 
-  /** 가치가 같으면 앞쪽 능력치부터 올린다. */
+  /** 같은 단계를 두고 코인이 모자라면 앞쪽 능력치부터 올린다. */
   const TIE_ORDER = ["boss", "ied", "att", "crit", "allstat"];
-
-  /**
-   * 자동 칸의 능력치 가치. 단계를 하나 올릴 때 드는 코인 대비 가치가 큰 칸부터 채운다.
-   * 보스 딜 추정: 보뎀+데미지 300%, 방무 93%·보스 방어율 300%, 크뎀 100%, 공격력 약 5,500, 주스탯 약 5만인
-   * 캐릭터에서 1단계가 최종 데미지를 올리는 비율(약 0.50 : 0.53 : 0.17 : 0.21 : 0.10%)을 반올림한 값.
-   */
-  const WEIGHT_PRESETS = {
-    even: { label: "고르게", weights: { allstat: 1, att: 1, boss: 1, ied: 1, crit: 1 } },
-    boss: { label: "보스 딜 추정", weights: { allstat: 1, att: 2, boss: 5, ied: 5, crit: 2 } },
-  };
 
   const toInt = (value) => {
     const n = Math.floor(Number(value));
@@ -57,19 +47,18 @@
   }
 
   /**
-   * @param {{coins:number, weeks:number, weights?:Record<string,number>,
+   * @param {{coins:number, weeks:number,
    *          characters:{id?:string, name:string, weekly:number, fixed?:Record<string, number|null>}[]}} input
    *   fixed[key]가 null/undefined면 자동, 0~5면 그 단계로 매번 고정(0은 안 씀).
    *
    * 자동 칸 = 캐릭터 × 능력치. 칸마다 "사용 1회를 l-1단계에서 l단계로 올리는" 일을 모아 두고,
-   * (가치 ÷ 올리는 코인)이 큰 것부터 남은 코인이 허락하는 만큼 채운다. 같은 칸 안에서는 단계가 오를수록
-   * 올리는 코인이 같거나 커지므로(50·75·75·100·200) 아래 단계부터 차례로 찬다.
+   * 올리는 코인이 싼 것부터(1단계 50 → 2·3단계 75 → 4단계 100 → 5단계 200) 남은 코인이 허락하는 만큼 채운다.
+   * 그래서 다섯 능력치가 같은 단계로 고르게 오르고, 남는 코인은 다음 칸 하나를 올리는 코인보다 적다.
    * 사용 1회 단위로 채우므로 칸 하나는 "기본 단계 + 이번 달 n회만 한 단계 위"가 될 수 있다.
    */
   function buildPlan(input) {
     const coins = toInt(input.coins);
     const weeks = toInt(input.weeks);
-    const weights = input.weights || WEIGHT_PRESETS.even.weights;
 
     const chars = (input.characters || []).map((c) => {
       const weekly = toInt(c.weekly);
@@ -98,33 +87,23 @@
     chars.forEach((c, charIndex) => {
       if (!c.uses) return;
       for (const key of STAT_KEYS) {
-        const weight = Math.max(0, Number(weights[key]) || 0);
-        if (c.stats[key].mode !== "auto" || !weight) continue;
-        for (let level = 1; level <= MAX_LEVEL; level++) {
-          blocks.push({ charIndex, key, level, step: stepCost(level - 1), weight });
-        }
+        if (c.stats[key].mode !== "auto") continue;
+        for (let level = 1; level <= MAX_LEVEL; level++) blocks.push({ charIndex, key, level, step: stepCost(level - 1) });
       }
     });
     blocks.sort((a, b) =>
-      b.weight * a.step - a.weight * b.step ||
+      a.step - b.step ||
       a.level - b.level ||
       TIE_ORDER.indexOf(a.key) - TIE_ORDER.indexOf(b.key) ||
       a.charIndex - b.charIndex);
 
-    const levels = [];
-    for (let level = 1; level <= MAX_LEVEL; level++) levels.push({ level, step: stepCost(level - 1), slots: 0, filled: 0, coins: 0 });
     let next = null;
     for (const block of blocks) {
-      const char = chars[block.charIndex];
-      const stat = char.stats[block.key];
+      const stat = chars[block.charIndex].stats[block.key];
       const available = stat.reach[block.level - 1];
       const filled = Math.min(available, Math.floor(left / block.step));
       stat.reach[block.level] = filled;
       left -= filled * block.step;
-      const row = levels[block.level - 1];
-      row.slots += char.uses;
-      row.filled += filled;
-      row.coins += filled * block.step;
       if (filled < available && !next) next = { charIndex: block.charIndex, key: block.key, level: block.level, step: block.step };
     }
 
@@ -157,7 +136,6 @@
       /** 음수면 고정 단계만으로 월 코인을 넘는다. */
       leftover: coins - used,
       shortfall: Math.max(0, fixedCoins - coins),
-      levels,
       autoSlots: blocks.length / MAX_LEVEL,
       /** 자동 칸이 있고 모두 5단계까지 찼는지. */
       maxed: blocks.length > 0 && !next,
@@ -167,48 +145,63 @@
   }
 
   /**
-   * 주차별 사용 계획. 한 단계 위로 쓰는 n회는 달의 마지막 사용들에 둔다(코인은 레이드를 돌며 달 동안 쌓이므로).
+   * 캐릭터의 index번째(0부터, 달 안의 순서) 사용에서 능력치별 단계.
+   * 한 단계 위로 쓰는 n회는 달의 마지막 사용들에 둔다.
+   */
+  function useLevels(char, index) {
+    const levels = {};
+    for (const key of STAT_KEYS) {
+      const stat = char.stats[key];
+      levels[key] = stat.level + (stat.up && index >= char.uses - stat.up ? 1 : 0);
+    }
+    return levels;
+  }
+
+  const levelsCost = (levels) => sum(STAT_KEYS, (key) => LEVEL_COST[levels[key]]);
+
+  /**
+   * 주차별 사용 계획. 주마다 캐릭터별로 같은 단계 조합끼리 묶는다.
+   * @returns {{week:number, uses:number, coins:number, cumulative:number, remaining:number,
+   *            cells:{uses:number, coins:number, groups:{count:number, levels:Record<string,number>, perUse:number}[]}[]}[]}
    */
   function buildSchedule(plan) {
     const rows = [];
     let cumulative = 0;
     for (let week = 0; week < plan.weeks; week++) {
       const cells = plan.chars.map((c) => {
-        const from = week * c.weekly;
-        const to = from + c.weekly;
-        let coins = c.weekly * c.perUse;
-        const ups = [];
-        for (const key of STAT_KEYS) {
-          const stat = c.stats[key];
-          if (!stat.up) continue;
-          const count = Math.max(0, Math.min(to, c.uses) - Math.max(from, c.uses - stat.up));
-          if (!count) continue;
-          coins += count * stepCost(stat.level);
-          ups.push({ key, level: stat.level + 1, count });
+        const groups = [];
+        for (let index = week * c.weekly; index < (week + 1) * c.weekly; index++) {
+          const levels = useLevels(c, index);
+          const last = groups[groups.length - 1];
+          if (last && STAT_KEYS.every((key) => last.levels[key] === levels[key])) last.count++;
+          else groups.push({ count: 1, levels, perUse: levelsCost(levels) });
         }
-        return { uses: c.weekly, coins, ups };
+        return { uses: c.weekly, coins: sum(groups, (g) => g.count * g.perUse), groups };
       });
       const coins = sum(cells, (cell) => cell.coins);
       cumulative += coins;
-      rows.push({ week: week + 1, cells, coins, cumulative, remaining: plan.coins - cumulative });
+      rows.push({ week: week + 1, uses: sum(cells, (cell) => cell.uses), coins, cumulative, remaining: plan.coins - cumulative, cells });
     }
     return rows;
   }
 
   /**
-   * 달의 날 수와 그 안의 목요일(주간 초기화). 목요일 하나가 한 주의 시작이고, 마지막 주는 달 끝에서 자른다
-   * (코인은 다음 달 1일 0시에 초기화되므로).
-   * @param {number} year
-   * @param {number} month 1~12
+   * 오늘이 든 주부터 이번 달 끝까지의 주. 주는 목요일 0시(주간 초기화)에 시작하고, 달 밖은 잘라 낸다
+   * (코인은 매월 1일 0시에 초기화된다). 날짜는 한국 시간 기준으로 넘긴다.
+   * @param {{year:number, month:number, day:number}} today month는 1~12
+   * @param {boolean} [includeCurrent=true] false면 이번 주를 빼고 다음 주부터 센다
    */
-  function monthInfo(year, month) {
+  function remainingWeeks(today, includeCurrent = true) {
+    const { year, month, day } = today;
     const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    const currentStart = day - ((weekday - 4 + 7) % 7);
     const weeks = [];
-    for (let day = 1; day <= days; day++) {
-      if (new Date(Date.UTC(year, month - 1, day)).getUTCDay() === 4) weeks.push({ start: day, end: Math.min(day + 6, days) });
+    for (let start = currentStart; start <= days; start += 7) {
+      weeks.push({ start: Math.max(1, start), end: Math.min(start + 6, days), current: start === currentStart });
     }
-    return { year, month, days, weeks };
+    return { year, month, day, days, weeks: includeCurrent ? weeks : weeks.slice(1) };
   }
 
-  return { LEVEL_COST, MAX_LEVEL, STATS, STAT_KEYS, TIE_ORDER, WEIGHT_PRESETS, statText, stepCost, buildPlan, buildSchedule, monthInfo };
+  return { LEVEL_COST, MAX_LEVEL, STATS, STAT_KEYS, TIE_ORDER, statText, stepCost, buildPlan, useLevels, buildSchedule, remainingWeeks };
 });
