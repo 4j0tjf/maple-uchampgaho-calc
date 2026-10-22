@@ -2,16 +2,16 @@
 
 이번 달 획득 챔피언 코인으로 캐릭터별 **챔피언의 가호** 단계를 정하고, 오늘부터 이번 달 끝까지 주차별로 몇 단계씩 쓸지 보여 준다. 추가 경험치를 뺀 다섯 능력치(올스탯, 공격력/마력, 보스 몬스터 데미지, 방어율 무시, 크리티컬 데미지)만 계산한다.
 
-시세 사이트(maple-market)·사냥 기록(maple-hunt)과 **따로 도는 별도 앱**이다. 포트, Windows 서비스, `.env`가 따로이고 DB와 상단 메뉴를 같이 쓰지 않는다. 주소만 시세 사이트와 같은 도메인의 **/gaho** 아래를 쓴다(`https://19991115.xyz/gaho/`).
+시세 사이트(maple-market)·사냥 기록(maple-hunt)·maple-Scheduler와 **따로 도는 별도 앱**이다. 포트, Windows 서비스, `.env`가 따로이고 DB와 상단 메뉴를 같이 쓰지 않는다. 주소만 시세 사이트와 같은 도메인의 **/gaho** 아래를 쓴다(`https://19991115.xyz/gaho/`).
 
 | | |
 |---|---|
-| 주소 | 외부 `https://19991115.xyz/gaho/` · 서버 PC 안 `http://127.0.0.1:3300/gaho/` (`/gaho`와 `/`는 `/gaho/`로 보낸다) |
-| 서버 | `node server.mjs` → `127.0.0.1:3300` (Node 18 이상, 설치할 패키지 없음) |
+| 주소 | 외부 `https://19991115.xyz/gaho/` · 서버 PC 안 `http://127.0.0.1:3400/gaho/` (`/gaho`와 `/`는 `/gaho/`로 보낸다) |
+| 서버 | `node server.mjs` → `127.0.0.1:3400` (Node 18 이상, 설치할 패키지 없음) |
 | 서비스 | `MapleGahoWeb` (NSSM) |
 | 설정 | `.env` (`.env.example` 복사): `HOST`, `PORT`, `BASE_PATH`(기본 `/gaho`), `NEXON_API_KEY`, `NEXON_DAILY_LIMIT` |
 | 외부 연결 | 기존 Cloudflare 터널(`MapleTunnel`)에 `/gaho` 경로 규칙 하나를 더한다(사냥 기록의 `/hunting`과 같은 방식) |
-| 저장 | 입력값은 브라우저의 `localStorage`(`uchamp-gaho:v1`)에만 남는다. 주소(출처)마다 따로라 `127.0.0.1:3300`과 `19991115.xyz`의 입력값은 서로 다르다. `19991115.xyz`에서는 시세 사이트와 같은 저장소를 쓰지만 키 이름이 겹치지 않는다. |
+| 저장 | 입력값은 브라우저의 `localStorage`(`uchamp-gaho:v1`)에만 남는다. 주소(출처)마다 따로라 `127.0.0.1:3400`과 `19991115.xyz`의 입력값은 서로 다르다. `19991115.xyz`에서는 시세 사이트와 같은 저장소를 쓰지만 키 이름이 겹치지 않는다. |
 | 테스트 | `npm test` |
 
 ## 서버 PC에 설치 (Windows, 한 번만)
@@ -27,15 +27,15 @@
 
    `.env`의 `NEXON_API_KEY`에 넥슨 Open API 키를 넣는다. maple-hunt의 `.env`와 같은 키를 써도 된다. 비워 두면 계산은 되고 캐릭터 이미지만 꺼진다.
 
-2. 포트 확인과 시험 실행. 첫 줄이 아무것도 출력하지 않으면 3300이 비어 있다(쓰는 중이면 `.env`의 `PORT`를 바꾼다).
+2. 포트 확인과 시험 실행. 3000은 maple-market, 3200·3201은 maple-hunt, 3300은 maple-Scheduler가 쓴다. 첫 줄이 아무것도 출력하지 않으면 3400이 비어 있다(쓰는 중이면 `.env`의 `PORT`를 바꾸고, 아래 터널 규칙의 포트도 같이 바꾼다).
 
    ```powershell
-   Get-NetTCPConnection -LocalPort 3300 -ErrorAction SilentlyContinue
+   Get-NetTCPConnection -LocalPort 3400 -ErrorAction SilentlyContinue
    npm test
    node server.mjs
    ```
 
-   `http://127.0.0.1:3300/gaho/`를 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
+   `http://127.0.0.1:3400/gaho/`를 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
 
 3. 서비스 등록 — 관리자 PowerShell. maple-hunt와 같은 NSSM으로 `node server.mjs`를 바로 부른다. `nssm.exe` 위치는 PC마다 달라서, 이미 NSSM으로 등록한 서비스(MapleHuntWeb 등)가 쓰는 것을 먼저 찾고, 없으면 PATH와 winget 설치 폴더에서 찾는다.
 
@@ -56,21 +56,21 @@
    & $nssm start MapleGahoWeb
    ```
 
-   마지막 줄에 `Unexpected status SERVICE_PAUSED`가 나오면 서버가 켜지자마자 꺼진 것이다(NSSM은 곧바로 꺼지는 서비스를 "일시 중지됨"으로 둔다). `Get-Content "$root\logs\web.log" -Tail 20`으로 이유를 본다. 흔한 경우는 2단계에서 시험으로 띄운 `node server.mjs`가 아직 3300을 쓰고 있는 것이다(`포트 3300을 다른 프로그램이 쓰고 있습니다`). 그 창을 `Ctrl+C`로 끄고 `Stop-Service MapleGahoWeb; Start-Service MapleGahoWeb`.
+   마지막 줄에 `Unexpected status SERVICE_PAUSED`가 나오면 서버가 켜지자마자 꺼진 것이다(NSSM은 곧바로 꺼지는 서비스를 "일시 중지됨"으로 둔다). `Get-Content "$root\logs\web.log" -Tail 20`으로 이유를 본다. 흔한 경우는 2단계에서 시험으로 띄운 `node server.mjs`가 아직 3400을 쓰고 있는 것이다(`포트 3400을 다른 프로그램이 쓰고 있습니다`). 그 창을 `Ctrl+C`로 끄고 `Stop-Service MapleGahoWeb; Start-Service MapleGahoWeb`.
 
 4. 밖에서 열기 — 기존 터널(`MapleTunnel`)에 `/gaho` 경로 규칙을 더한다. `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고(사냥 기록의 `/hunting` 규칙 옆) `Restart-Service MapleTunnel`. DNS는 이미 있는 `19991115.xyz`를 그대로 쓴다.
 
    ```yaml
      - hostname: 19991115.xyz
        path: ^/gaho(/.*)?$
-       service: http://127.0.0.1:3300
+       service: http://127.0.0.1:3400
    ```
 
    터널은 경로를 그대로 넘기고, 이 서버가 `/gaho` 아래만 받는다. 규칙이 전체 규칙보다 아래에 있으면 요청이 시세 사이트로 가서 404가 난다. 예전 안내대로 `gaho.19991115.xyz` 규칙이나 DNS를 만들었다면 지워도 된다.
 
    주소를 아는 사람은 누구나 열 수 있다. 넥슨 키는 서버에만 있고 화면에는 나가지 않는다. 남이 캐릭터 조회를 많이 눌러도 하루 `NEXON_DAILY_LIMIT`(기본 300건)에서 멈춰 maple-hunt가 쓸 몫이 남는다.
 
-   터널 없이 같은 공유기의 다른 기기에서만 열려면 `.env`를 `HOST=0.0.0.0`으로 바꾸고 방화벽을 연다: `New-NetFirewallRule -DisplayName "MapleGaho 3300" -Direction Inbound -Protocol TCP -LocalPort 3300 -Action Allow -Profile Private`, 그다음 `Restart-Service MapleGahoWeb`. 주소는 `http://<서버 PC IP>:3300/gaho/`.
+   터널 없이 같은 공유기의 다른 기기에서만 열려면 `.env`를 `HOST=0.0.0.0`으로 바꾸고 방화벽을 연다: `New-NetFirewallRule -DisplayName "MapleGaho 3400" -Direction Inbound -Protocol TCP -LocalPort 3400 -Action Allow -Profile Private`, 그다음 `Restart-Service MapleGahoWeb`. 주소는 `http://<서버 PC IP>:3400/gaho/`.
 
 ## 코드를 고친 뒤 적용
 
@@ -82,7 +82,7 @@ git pull
 Restart-Service MapleGahoWeb
 ```
 
-점검: `Invoke-RestMethod http://127.0.0.1:3300/gaho/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
+점검: `Invoke-RestMethod http://127.0.0.1:3400/gaho/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
 
 ## 화면
 

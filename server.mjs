@@ -10,7 +10,7 @@
  *   GET /gaho/api/status           { nexon: 키가 있는지 }
  *   GET /gaho/api/character?name=  { name, image, level, job, world } 또는 { error: { code, short, message } }
  *
- * 설정은 같은 폴더의 .env(.env.example 참고) 또는 환경 변수: PORT(기본 3300), HOST(기본 127.0.0.1),
+ * 설정은 같은 폴더의 .env(.env.example 참고) 또는 환경 변수: PORT(기본 3400), HOST(기본 127.0.0.1),
  * BASE_PATH(기본 /gaho, 빈 값이면 /에서 연다), NEXON_API_KEY, NEXON_DAILY_LIMIT(기본 300).
  */
 import { createServer } from "node:http";
@@ -116,7 +116,7 @@ export function createAppServer({ nexon, basePath = "/gaho", root = ROOT, log = 
 const isEntry = process.argv[1] && resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
 if (isEntry) {
   loadEnv(join(ROOT, ".env"));
-  const port = Number(process.env.PORT) || 3300;
+  const port = Number(process.env.PORT) || 3400;
   const host = process.env.HOST || "127.0.0.1";
   const basePath = normalizeBasePath(process.env.BASE_PATH ?? "/gaho");
   const nexon = createNexon({ apiKey: process.env.NEXON_API_KEY || "", dailyLimit: Number(process.env.NEXON_DAILY_LIMIT) || 300 });
