@@ -119,7 +119,14 @@ if (isEntry) {
   const host = process.env.HOST || "127.0.0.1";
   const basePath = normalizeBasePath(process.env.BASE_PATH ?? "/gaho");
   const nexon = createNexon({ apiKey: process.env.NEXON_API_KEY || "", dailyLimit: Number(process.env.NEXON_DAILY_LIMIT) || 300 });
-  createAppServer({ nexon, basePath }).listen(port, host, () => {
-    console.log(`유챔 가호 계산기: http://${host}:${port}${basePath}/ (넥슨 API 키 ${nexon.enabled ? "있음" : "없음 - 캐릭터 이미지 꺼짐"})`);
+  const server = createAppServer({ nexon, basePath });
+  // 서비스로 돌 때는 이 줄이 logs\web.log에 남는다. 바로 꺼지면 NSSM이 서비스를 "일시 중지됨"으로 둔다.
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") console.error(`[server] 포트 ${port}을 다른 프로그램이 쓰고 있습니다. 시험으로 띄운 node server.mjs 창을 닫거나 .env의 PORT를 바꾸세요.`);
+    else console.error(`[server] ${error.stack || error}`);
+    process.exit(1);
+  });
+  server.listen(port, host, () => {
+    console.log(`유챔 가호 계산기: http://${host}:${port}${basePath}/ (Node ${process.version}, 넥슨 API 키 ${nexon.enabled ? "있음" : "없음 - 캐릭터 이미지 꺼짐"})`);
   });
 }

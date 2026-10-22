@@ -56,6 +56,8 @@
    & $nssm start MapleGahoWeb
    ```
 
+   마지막 줄에 `Unexpected status SERVICE_PAUSED`가 나오면 서버가 켜지자마자 꺼진 것이다(NSSM은 곧바로 꺼지는 서비스를 "일시 중지됨"으로 둔다). `Get-Content "$root\logs\web.log" -Tail 20`으로 이유를 본다. 흔한 경우는 2단계에서 시험으로 띄운 `node server.mjs`가 아직 3300을 쓰고 있는 것이다(`포트 3300을 다른 프로그램이 쓰고 있습니다`). 그 창을 `Ctrl+C`로 끄고 `Stop-Service MapleGahoWeb; Start-Service MapleGahoWeb`.
+
 4. 밖에서 열기 — 기존 터널(`MapleTunnel`)에 `/gaho` 경로 규칙을 더한다. `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고(사냥 기록의 `/hunting` 규칙 옆) `Restart-Service MapleTunnel`. DNS는 이미 있는 `19991115.xyz`를 그대로 쓴다.
 
    ```yaml
