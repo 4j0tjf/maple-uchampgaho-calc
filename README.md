@@ -19,8 +19,8 @@
 1. 받기와 설정. 폴더는 다른 사이트 옆에 둔다.
 
    ```powershell
-   git clone -b claude/modest-fermi-b4mhaf https://github.com/4j0tjf/maple-uchampgaho-calc D:\evelopment\maple-uchampgaho-calc
-   cd D:\evelopment\maple-uchampgaho-calc
+   git clone -b claude/modest-fermi-b4mhaf https://github.com/4j0tjf/maple-uchampgaho-calc C:\Development\maple-uchampgaho-calc
+   cd C:\Development\maple-uchampgaho-calc
    Copy-Item .env.example .env
    notepad .env
    ```
@@ -42,7 +42,7 @@
    ```powershell
    $nssm = "C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\NSSM.NSSM_Microsoft.Winget.Source_8wekyb3d8bbwe\nssm-2.24-101-g897c7ad\win64\nssm.exe"
    $node = (Get-Command node).Source
-   $root = "D:\evelopment\maple-uchampgaho-calc"
+   $root = "C:\Development\maple-uchampgaho-calc"
    New-Item -ItemType Directory -Force "$root\logs" | Out-Null
    & $nssm install MapleGahoWeb $node "$root\server.mjs"
    & $nssm set MapleGahoWeb AppDirectory $root
@@ -70,7 +70,7 @@
 빌드가 없다. 받고 서비스만 다시 시작한다. `.env`를 고쳤을 때도 다시 시작한다.
 
 ```powershell
-cd D:\evelopment\maple-uchampgaho-calc
+cd C:\Development\maple-uchampgaho-calc
 git pull
 Restart-Service MapleGahoWeb
 ```
