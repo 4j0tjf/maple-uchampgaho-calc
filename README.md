@@ -37,10 +37,15 @@
 
    `http://127.0.0.1:3300/gaho/`를 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
 
-3. 서비스 등록 — 관리자 PowerShell. maple-hunt와 같은 NSSM으로 `node server.mjs`를 바로 부른다.
+3. 서비스 등록 — 관리자 PowerShell. maple-hunt와 같은 NSSM으로 `node server.mjs`를 바로 부른다. `nssm.exe` 위치는 PC마다 달라서, 이미 NSSM으로 등록한 서비스(MapleHuntWeb 등)가 쓰는 것을 먼저 찾고, 없으면 PATH와 winget 설치 폴더에서 찾는다.
 
    ```powershell
-   $nssm = "C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\NSSM.NSSM_Microsoft.Winget.Source_8wekyb3d8bbwe\nssm-2.24-101-g897c7ad\win64\nssm.exe"
+   $nssm = $null
+   foreach ($svc in Get-CimInstance Win32_Service) { if ($svc.PathName -match '"?([^"]*nssm\.exe)') { $nssm = $Matches[1]; break } }
+   if (-not $nssm) { $nssm = (Get-Command nssm -ErrorAction SilentlyContinue).Source }
+   if (-not $nssm) { $nssm = Get-ChildItem "C:\Users\*\AppData\Local\Microsoft\WinGet\Packages" -Recurse -Filter nssm.exe -ErrorAction SilentlyContinue | Sort-Object { $_.FullName -notmatch 'win64' } | Select-Object -First 1 -ExpandProperty FullName }
+   if (-not $nssm) { throw "nssm.exe를 찾지 못했습니다. winget install --id NSSM.NSSM -e 로 설치하고 PowerShell을 새로 연 뒤 다시 실행하세요." }
+   "NSSM: $nssm"
    $node = (Get-Command node).Source
    $root = "C:\Development\maple-uchampgaho-calc"
    New-Item -ItemType Directory -Force "$root\logs" | Out-Null
