@@ -58,15 +58,30 @@
 
    마지막 줄에 `Unexpected status SERVICE_PAUSED`가 나오면 서버가 켜지자마자 꺼진 것이다(NSSM은 곧바로 꺼지는 서비스를 "일시 중지됨"으로 둔다). `Get-Content "$root\logs\web.log" -Tail 20`으로 이유를 본다. 흔한 경우는 2단계에서 시험으로 띄운 `node server.mjs`가 아직 3400을 쓰고 있는 것이다(`포트 3400을 다른 프로그램이 쓰고 있습니다`). 그 창을 `Ctrl+C`로 끄고 `Stop-Service MapleGahoWeb; Start-Service MapleGahoWeb`.
 
-4. 밖에서 열기 — 기존 터널(`MapleTunnel`)에 `/gaho` 경로 규칙을 더한다. `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고(사냥 기록의 `/hunting` 규칙 옆) `Restart-Service MapleTunnel`. DNS는 이미 있는 `19991115.xyz`를 그대로 쓴다.
+4. 밖에서 열기 — 기존 터널(`MapleTunnel`, NSSM 서비스)에 `/gaho` 경로 규칙을 더한다. 설정 파일은 `C:\ProgramData\MapleTunnel\config.yml`이다(`nssm get MapleTunnel AppParameters`의 `--config`). DNS는 이미 있는 `19991115.xyz`를 그대로 쓴다.
+
+   터널은 규칙을 위에서부터 맞춰 보므로, `19991115.xyz` → 3000(시세 사이트) 규칙 **위에** 넣는다. 사냥 기록은 시세 사이트의 rewrite를 거치므로 이 파일에 `/hunting` 규칙이 없다.
 
    ```yaml
+   ingress:
      - hostname: 19991115.xyz
        path: ^/gaho(/.*)?$
        service: http://127.0.0.1:3400
+     - hostname: 19991115.xyz
+       service: http://127.0.0.1:3000
+     - service: http_status:404
    ```
 
-   터널은 경로를 그대로 넘기고, 이 서버가 `/gaho` 아래만 받는다. 규칙이 전체 규칙보다 아래에 있으면 요청이 시세 사이트로 가서 404가 난다. 예전 안내대로 `gaho.19991115.xyz` 규칙이나 DNS를 만들었다면 지워도 된다.
+   관리자 PowerShell에서 검사한 뒤 다시 시작한다. `/gaho/`는 3400, `/`는 3000으로 나와야 한다.
+
+   ```powershell
+   $cf = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+   $cfg = "C:\ProgramData\MapleTunnel\config.yml"
+   & $cf tunnel --config $cfg ingress validate
+   & $cf tunnel --config $cfg ingress rule https://19991115.xyz/gaho/
+   & $cf tunnel --config $cfg ingress rule https://19991115.xyz/
+   Restart-Service MapleTunnel
+   ```
 
    주소를 아는 사람은 누구나 열 수 있다. 넥슨 키는 서버에만 있고 화면에는 나가지 않는다. 남이 캐릭터 조회를 많이 눌러도 하루 `NEXON_DAILY_LIMIT`(기본 300건)에서 멈춰 maple-hunt가 쓸 몫이 남는다.
 
