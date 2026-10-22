@@ -59,7 +59,8 @@ export function normalizeBasePath(value) {
 /** KEY=VALUE 줄만 읽는 작은 .env 해석. 이미 있는 환경 변수는 덮지 않는다. */
 export function loadEnv(file) {
   if (!existsSync(file)) return;
-  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+  // 메모장·PowerShell 5.1은 UTF-8 앞에 BOM을 붙이기도 한다. 남겨 두면 첫 줄의 키 이름이 깨진다.
+  for (const line of readFileSync(file, "utf8").replace(/^\uFEFF/, "").split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (!match || match[1] in process.env) continue;
     process.env[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");

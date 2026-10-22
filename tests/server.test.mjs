@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createNexon, NexonError } from "../nexon.mjs";
-import { createAppServer, normalizeBasePath } from "../server.mjs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAppServer, loadEnv, normalizeBasePath } from "../server.mjs";
 
 /** 넥슨 API 흉내. 부른 경로를 calls에 남긴다. */
 function fakeNexon(routes) {
@@ -114,4 +117,14 @@ test("BASE_PATH를 비우면 맨 앞(/)에서 연다", async (t) => {
   const origin = await listen(t, { nexon: createNexon({ apiKey: "" }), basePath: "" });
   assert.equal((await fetch(`${origin}/`)).status, 200);
   assert.deepEqual(await (await fetch(`${origin}/api/status`)).json(), { nexon: false });
+});
+
+test(".env는 BOM이 붙어 있어도 첫 줄 키를 읽고, 이미 있는 환경 변수는 덮지 않는다", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "gaho-env-")), ".env");
+  writeFileSync(file, "\uFEFFGAHO_TEST_PORT=3310\r\nGAHO_TEST_KEY=\"live_abc\"\r\n# 주석\r\nGAHO_TEST_KEEP=new\r\n");
+  process.env.GAHO_TEST_KEEP = "old";
+  loadEnv(file);
+  assert.equal(process.env.GAHO_TEST_PORT, "3310");
+  assert.equal(process.env.GAHO_TEST_KEY, "live_abc");
+  assert.equal(process.env.GAHO_TEST_KEEP, "old");
 });
