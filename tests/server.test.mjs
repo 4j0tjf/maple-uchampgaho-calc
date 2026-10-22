@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createNexon, NexonError } from "../nexon.mjs";
-import { createAppServer } from "../server.mjs";
+import { createAppServer, normalizeBasePath } from "../server.mjs";
 
 /** 넥슨 API 흉내. 부른 경로를 calls에 남긴다. */
 function fakeNexon(routes) {
@@ -63,12 +63,17 @@ test("하루 호출 한도를 넘으면 막고, 한국 날짜가 바뀌면 다�
   assert.deepEqual(nexon.usage(), { day: "2026-10-22", calls: 2, dailyLimit: 3 });
 });
 
-test("서버는 화면 파일과 API만 내주고 .env·서버 코드는 내주지 않는다", async (t) => {
-  const { fetchImpl } = fakeNexon(okRoutes);
-  const server = createAppServer({ nexon: createNexon({ apiKey: "k", fetchImpl, gapMs: 0 }), log: () => {} });
+async function listen(t, options) {
+  const server = createAppServer({ log: () => {}, ...options });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
-  const base = `http://127.0.0.1:${server.address().port}`;
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test("서버는 /gaho 아래에서 화면 파일과 API만 내주고 .env·서버 코드는 내주지 않는다", async (t) => {
+  const { fetchImpl } = fakeNexon(okRoutes);
+  const origin = await listen(t, { nexon: createNexon({ apiKey: "k", fetchImpl, gapMs: 0 }) });
+  const base = `${origin}/gaho`;
 
   const page = await fetch(`${base}/`);
   assert.equal(page.status, 200);
@@ -79,6 +84,10 @@ test("서버는 화면 파일과 API만 내주고 .env·서버 코드는 내주�
   for (const path of ["/.env", "/.env.example", "/server.mjs", "/nexon.mjs", "/package.json", "/../README.md", "/%2e%2e/README.md"]) {
     assert.equal((await fetch(`${base}${path}`)).status, 404, path);
   }
+  // /gaho 밖의 경로는 시세 사이트 몫이라 내주지 않는다.
+  for (const path of ["/plan.js", "/api/status", "/gahoo/", "/hunting/"]) {
+    assert.equal((await fetch(`${origin}${path}`, { redirect: "manual" })).status, 404, path);
+  }
 
   assert.deepEqual(await (await fetch(`${base}/api/status`)).json(), { nexon: true });
   const character = await fetch(`${base}/api/character?name=${encodeURIComponent("아델본캐")}`);
@@ -88,4 +97,21 @@ test("서버는 화면 파일과 API만 내주고 .env·서버 코드는 내주�
   assert.equal(missing.status, 404);
   assert.deepEqual((await missing.json()).error.code, "OPENAPI00004");
   assert.equal((await fetch(`${base}/api/status`, { method: "POST" })).status, 405);
+});
+
+test("/gaho와 /는 /gaho/로 보낸다(화면이 상대 경로로 파일을 부르므로 /로 끝나야 한다)", async (t) => {
+  const origin = await listen(t, { nexon: createNexon({ apiKey: "" }) });
+  for (const [path, location] of [["/gaho", "/gaho/"], ["/gaho?x=1", "/gaho/?x=1"], ["/", "/gaho/"]]) {
+    const response = await fetch(`${origin}${path}`, { redirect: "manual" });
+    assert.equal(response.status, 302, path);
+    assert.equal(response.headers.get("location"), location, path);
+  }
+});
+
+test("BASE_PATH를 비우면 맨 앞(/)에서 연다", async (t) => {
+  assert.equal(normalizeBasePath(" gaho/ "), "/gaho");
+  assert.equal(normalizeBasePath("/"), "");
+  const origin = await listen(t, { nexon: createNexon({ apiKey: "" }), basePath: "" });
+  assert.equal((await fetch(`${origin}/`)).status, 200);
+  assert.deepEqual(await (await fetch(`${origin}/api/status`)).json(), { nexon: false });
 });

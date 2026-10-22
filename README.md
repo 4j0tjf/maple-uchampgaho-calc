@@ -2,15 +2,16 @@
 
 이번 달 획득 챔피언 코인으로 캐릭터별 **챔피언의 가호** 단계를 정하고, 오늘부터 이번 달 끝까지 주차별로 몇 단계씩 쓸지 보여 준다. 추가 경험치를 뺀 다섯 능력치(올스탯, 공격력/마력, 보스 몬스터 데미지, 방어율 무시, 크리티컬 데미지)만 계산한다.
 
-시세 사이트(maple-market)·사냥 기록(maple-hunt)과 **따로 도는 별도 앱**이다. 포트, Windows 서비스, `.env`, 주소가 모두 따로이고 DB와 상단 메뉴를 같이 쓰지 않는다.
+시세 사이트(maple-market)·사냥 기록(maple-hunt)과 **따로 도는 별도 앱**이다. 포트, Windows 서비스, `.env`가 따로이고 DB와 상단 메뉴를 같이 쓰지 않는다. 주소만 시세 사이트와 같은 도메인의 **/gaho** 아래를 쓴다(`https://19991115.xyz/gaho/`).
 
 | | |
 |---|---|
+| 주소 | 외부 `https://19991115.xyz/gaho/` · 서버 PC 안 `http://127.0.0.1:3300/gaho/` (`/gaho`와 `/`는 `/gaho/`로 보낸다) |
 | 서버 | `node server.mjs` → `127.0.0.1:3300` (Node 18 이상, 설치할 패키지 없음) |
 | 서비스 | `MapleGahoWeb` (NSSM) |
-| 설정 | `.env` (`.env.example` 복사): `HOST`, `PORT`, `NEXON_API_KEY`, `NEXON_DAILY_LIMIT` |
-| 외부 주소 (선택) | 기존 Cloudflare 터널에 하위 도메인 하나(예: `gaho.19991115.xyz`)를 더한다 |
-| 저장 | 입력값은 브라우저의 `localStorage`(`uchamp-gaho:v1`)에만 남는다. 주소마다 따로라 `127.0.0.1:3300`과 외부 주소의 입력값은 서로 다르다. |
+| 설정 | `.env` (`.env.example` 복사): `HOST`, `PORT`, `BASE_PATH`(기본 `/gaho`), `NEXON_API_KEY`, `NEXON_DAILY_LIMIT` |
+| 외부 연결 | 기존 Cloudflare 터널(`MapleTunnel`)에 `/gaho` 경로 규칙 하나를 더한다(사냥 기록의 `/hunting`과 같은 방식) |
+| 저장 | 입력값은 브라우저의 `localStorage`(`uchamp-gaho:v1`)에만 남는다. 주소(출처)마다 따로라 `127.0.0.1:3300`과 `19991115.xyz`의 입력값은 서로 다르다. `19991115.xyz`에서는 시세 사이트와 같은 저장소를 쓰지만 키 이름이 겹치지 않는다. |
 | 테스트 | `npm test` |
 
 ## 서버 PC에 설치 (Windows, 한 번만)
@@ -34,7 +35,7 @@
    node server.mjs
    ```
 
-   `http://127.0.0.1:3300`을 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
+   `http://127.0.0.1:3300/gaho/`를 열어 보고 `Ctrl+C`로 끈다. 콘솔에 "넥슨 API 키 있음"이 나와야 이미지가 나온다.
 
 3. 서비스 등록 — 관리자 PowerShell. maple-hunt와 같은 NSSM으로 `node server.mjs`를 바로 부른다.
 
@@ -50,19 +51,19 @@
    & $nssm start MapleGahoWeb
    ```
 
-4. (선택) 밖에서 열기 — 기존 터널(`MapleTunnel`)에 **하위 도메인**을 더한다. 시세 사이트 주소(`19991115.xyz`)의 경로를 빌리지 않으므로 기존 규칙은 그대로 둔다.
+4. 밖에서 열기 — 기존 터널(`MapleTunnel`)에 `/gaho` 경로 규칙을 더한다. `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고(사냥 기록의 `/hunting` 규칙 옆) `Restart-Service MapleTunnel`. DNS는 이미 있는 `19991115.xyz`를 그대로 쓴다.
 
-   - DNS: `cloudflared tunnel route dns <터널 이름> gaho.19991115.xyz` (터널 이름은 `config.yml`의 `tunnel:` 값)
-   - `C:\Users\user\.cloudflared\config.yml`의 전체 규칙(`service: http://127.0.0.1:3000`) **위에** 넣고 `Restart-Service MapleTunnel`:
+   ```yaml
+     - hostname: 19991115.xyz
+       path: ^/gaho(/.*)?$
+       service: http://127.0.0.1:3300
+   ```
 
-     ```yaml
-       - hostname: gaho.19991115.xyz
-         service: http://127.0.0.1:3300
-     ```
+   터널은 경로를 그대로 넘기고, 이 서버가 `/gaho` 아래만 받는다. 규칙이 전체 규칙보다 아래에 있으면 요청이 시세 사이트로 가서 404가 난다. 예전 안내대로 `gaho.19991115.xyz` 규칙이나 DNS를 만들었다면 지워도 된다.
 
    주소를 아는 사람은 누구나 열 수 있다. 넥슨 키는 서버에만 있고 화면에는 나가지 않는다. 남이 캐릭터 조회를 많이 눌러도 하루 `NEXON_DAILY_LIMIT`(기본 300건)에서 멈춰 maple-hunt가 쓸 몫이 남는다.
 
-   같은 공유기의 다른 기기에서만 열려면 터널 대신 `.env`를 `HOST=0.0.0.0`으로 바꾸고 방화벽을 연다: `New-NetFirewallRule -DisplayName "MapleGaho 3300" -Direction Inbound -Protocol TCP -LocalPort 3300 -Action Allow -Profile Private`, 그다음 `Restart-Service MapleGahoWeb`.
+   터널 없이 같은 공유기의 다른 기기에서만 열려면 `.env`를 `HOST=0.0.0.0`으로 바꾸고 방화벽을 연다: `New-NetFirewallRule -DisplayName "MapleGaho 3300" -Direction Inbound -Protocol TCP -LocalPort 3300 -Action Allow -Profile Private`, 그다음 `Restart-Service MapleGahoWeb`. 주소는 `http://<서버 PC IP>:3300/gaho/`.
 
 ## 코드를 고친 뒤 적용
 
@@ -74,7 +75,7 @@ git pull
 Restart-Service MapleGahoWeb
 ```
 
-점검: `Invoke-RestMethod http://127.0.0.1:3300/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
+점검: `Invoke-RestMethod http://127.0.0.1:3300/gaho/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
 
 ## 화면
 
@@ -86,9 +87,10 @@ Restart-Service MapleGahoWeb
 
 ## 서버와 넥슨 Open API
 
-- `GET /` 화면 파일(`index.html`, `styles.css`, `app.js`, `plan.js`, `icon.svg`)만 내준다. `.env`·서버 코드는 경로를 맞춰도 404다.
-- `GET /api/status` → `{ nexon }`: 서버에 키가 있는지. 화면은 이것으로 이미지 조회를 켜고 끈다.
-- `GET /api/character?name=` → `{ name, image, level, job, world }`. 서버가 넥슨 `GET /maplestory/v1/id?character_name=`로 ocid를, `GET /maplestory/v1/character/basic?ocid=`로 기본 정보를 받는다(헤더 `x-nxopen-api-key`). 실패하면 `{ error: { code, short, message } }`.
+- 모든 경로는 `BASE_PATH`(기본 `/gaho`) 아래다. 화면은 파일과 API를 상대 경로로 부르므로 주소가 `/gaho/`처럼 `/`로 끝나야 한다. 그래서 `/gaho`와 `/`는 `/gaho/`로 보내고, `/gaho` 밖의 경로는 404다.
+- `GET /gaho/` 화면 파일(`index.html`, `styles.css`, `app.js`, `plan.js`, `icon.svg`)만 내준다. `.env`·서버 코드는 경로를 맞춰도 404다.
+- `GET /gaho/api/status` → `{ nexon }`: 서버에 키가 있는지. 화면은 이것으로 이미지 조회를 켜고 끈다.
+- `GET /gaho/api/character?name=` → `{ name, image, level, job, world }`. 서버가 넥슨 `GET /maplestory/v1/id?character_name=`로 ocid를, `GET /maplestory/v1/character/basic?ocid=`로 기본 정보를 받는다(헤더 `x-nxopen-api-key`). 실패하면 `{ error: { code, short, message } }`.
 - 호출을 아낀다: ocid 7일, 기본 정보 1시간 캐시. 서버 전체에서 한 줄로 세워 초당 5건을 넘지 않는다. 하루(한국 날짜) `NEXON_DAILY_LIMIT`건을 넘으면 막는다. 캐릭터 1명 조회에 2건 든다.
 - 화면은 캐릭터를 추가하거나 이름을 고칠 때, "캐릭터 이미지 새로고침"을 누를 때, 페이지를 열었을 때 하루 넘은 정보만 다시 부른다(코디를 바꾸면 이미지 주소가 바뀐다).
 - `index.html`을 서버 없이 파일로 열어도 계산은 된다. 이미지만 나오지 않는다.
