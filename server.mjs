@@ -8,11 +8,15 @@
  *
  *   GET /gaho/                     화면(index.html, styles.css, app.js, plan.js, icon.svg만 내준다).
  *                                  index.html은 스크립트·스타일을 내용 해시가 붙은 이름(app.1a2b3c4d5e.js)으로 부른다.
- *   GET /gaho/api/status           { nexon: 키가 있는지 }
+ *   GET /gaho/api/status           { nexon: 키가 있는지, scheduler: 같은 도메인의 스케줄러 주소("/scheduler", 끄면 "") }
  *   GET /gaho/api/character?name=  { name, image, level, job, world } 또는 { error: { code, short, message } }
  *
  * 설정은 같은 폴더의 .env(.env.example 참고) 또는 환경 변수: PORT(기본 3400), HOST(기본 127.0.0.1),
- * BASE_PATH(기본 /gaho, 빈 값이면 /에서 연다), NEXON_API_KEY, NEXON_DAILY_LIMIT(기본 300).
+ * BASE_PATH(기본 /gaho, 빈 값이면 /에서 연다), NEXON_API_KEY, NEXON_DAILY_LIMIT(기본 300),
+ * SCHEDULER_PATH(기본 /scheduler, 빈 값이면 스케줄러 로그인을 끈다).
+ *
+ * 스케줄러 연동: 화면이 같은 도메인의 스케줄러 API(/scheduler/api/session·characters·gaho)를 직접 부른다.
+ * 스케줄러 세션 쿠키는 /scheduler 아래에만 가므로 이 서버는 로그인·계정 값·계정의 넥슨 키를 다루지 않는다.
  */
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -96,10 +100,11 @@ function send(res, status, headers, body) {
 const json = (res, status, value) => send(res, status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify(value));
 
 /**
- * @param {{nexon: ReturnType<typeof createNexon>, basePath?: string, root?: string, log?: (message: string) => void}} options
+ * @param {{nexon: ReturnType<typeof createNexon>, basePath?: string, schedulerPath?: string, root?: string, log?: (message: string) => void}} options
  */
-export function createAppServer({ nexon, basePath = "/gaho", root = ROOT, log = console.error }) {
+export function createAppServer({ nexon, basePath = "/gaho", schedulerPath = "/scheduler", root = ROOT, log = console.error }) {
   const base = normalizeBasePath(basePath);
+  const scheduler = normalizeBasePath(schedulerPath);
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
@@ -109,7 +114,7 @@ export function createAppServer({ nexon, basePath = "/gaho", root = ROOT, log = 
       if (base && !url.pathname.startsWith(`${base}/`)) return send(res, 404, { "content-type": "text/plain; charset=utf-8" }, "찾는 페이지가 없습니다.");
       const path = url.pathname.slice(base.length);
 
-      if (path === "/api/status") return json(res, 200, { nexon: nexon.enabled });
+      if (path === "/api/status") return json(res, 200, { nexon: nexon.enabled, scheduler });
       if (path === "/api/character") {
         try {
           return json(res, 200, await nexon.character(url.searchParams.get("name") || ""));
@@ -146,8 +151,9 @@ if (isEntry) {
   const port = Number(process.env.PORT) || 3400;
   const host = process.env.HOST || "127.0.0.1";
   const basePath = normalizeBasePath(process.env.BASE_PATH ?? "/gaho");
+  const schedulerPath = normalizeBasePath(process.env.SCHEDULER_PATH ?? "/scheduler");
   const nexon = createNexon({ apiKey: process.env.NEXON_API_KEY || "", dailyLimit: Number(process.env.NEXON_DAILY_LIMIT) || 300 });
-  const server = createAppServer({ nexon, basePath });
+  const server = createAppServer({ nexon, basePath, schedulerPath });
   // 서비스로 돌 때는 이 줄이 logs\web.log에 남는다. 바로 꺼지면 NSSM이 서비스를 "일시 중지됨"으로 둔다.
   server.on("error", (error) => {
     if (error.code === "EADDRINUSE") console.error(`[server] 포트 ${port}을 다른 프로그램이 쓰고 있습니다. 시험으로 띄운 node server.mjs 창을 닫거나 .env의 PORT를 바꾸세요.`);

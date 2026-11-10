@@ -62,27 +62,34 @@
 
   const emptyFixed = () => Object.fromEntries(P.STAT_KEYS.map((key) => [key, null]));
   let seq = 0;
-  const uid = () => `c${Date.now().toString(36)}${(seq++).toString(36)}`;
+  const uid = (prefix = "c") => `${prefix}${Date.now().toString(36)}${(seq++).toString(36)}`;
+
+  /**
+   * 챔피언 코인은 넥슨 계정(유니온)마다 따로다. 그래서 코인·이월 코인·캐릭터를 넥슨 계정 탭(profile)마다 둔다.
+   * state = { version: 2, example, active: 탭 id, profiles: [{ id, name, coins, carry, carryMonth, includeCurrent, characters }] }
+   * 캐릭터의 scheduler는 스케줄러에 등록한 같은 캐릭터의 id(스케줄러에서 불러왔을 때).
+   */
+  const MAX_PROFILES = 20;
+  const MAX_CHARACTERS = 60;
+  const profileName = (index) => `넥슨 계정 ${index + 1}`;
+  const newProfile = (name, characters = []) => ({ id: uid("p"), name, coins: 0, carry: 0, carryMonth: "", includeCurrent: true, characters });
+  const newCharacter = (name, extra = {}) => ({ id: uid(), name, weekly: 1, fixed: emptyFixed(), nexon: null, scheduler: null, ...extra });
 
   function exampleState() {
-    return {
-      example: true,
-      coins: 20000,
-      carry: 0,
-      carryMonth: "",
-      includeCurrent: true,
-      characters: [
-        { id: uid(), name: "본캐", weekly: 1, fixed: { ...emptyFixed(), boss: 5, ied: 5 }, nexon: null },
-        { id: uid(), name: "부캐 1", weekly: 1, fixed: emptyFixed(), nexon: null },
-        { id: uid(), name: "부캐 2", weekly: 1, fixed: emptyFixed(), nexon: null },
-      ],
-    };
+    const profile = newProfile(profileName(0), [
+      newCharacter("본캐", { fixed: { ...emptyFixed(), boss: 5, ied: 5 } }),
+      newCharacter("부캐 1"),
+      newCharacter("부캐 2"),
+    ]);
+    profile.coins = 20000;
+    return { version: 2, example: true, active: profile.id, profiles: [profile] };
   }
 
   const intIn = (value, min, max, fallback) => {
     const n = Math.floor(Number(value));
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   };
+  const idOf = (value, prefix) => (typeof value === "string" && /^[\w-]{1,64}$/.test(value) ? value : uid(prefix));
 
   /** 넥슨 API 응답에서 화면에 쓰는 값만 남긴다. 이미지는 넥슨 주소만 받는다. */
   function sanitizeNexon(raw) {
@@ -97,36 +104,55 @@
     };
   }
 
-  /** 저장본이 깨졌거나 옛 형식(계산할 달·가치가 있던 때)이어도 화면이 뜨도록 값마다 확인한다. */
-  function sanitize(raw) {
-    if (!raw || typeof raw !== "object") return null;
-    const characters = Array.isArray(raw.characters)
-      ? raw.characters.slice(0, 60).map((c) => {
-          const fixed = emptyFixed();
-          for (const key of P.STAT_KEYS) {
-            const value = c?.fixed?.[key];
-            fixed[key] = value == null ? null : intIn(value, 0, P.MAX_LEVEL, null);
-          }
-          return {
-            id: typeof c?.id === "string" ? c.id : uid(),
-            name: String(c?.name ?? "").slice(0, 20),
-            weekly: intIn(c?.weekly, 0, MAX_WEEKLY, 1),
-            fixed,
-            nexon: sanitizeNexon(c?.nexon),
-          };
-        })
-      : [];
+  function sanitizeCharacter(c) {
+    const fixed = emptyFixed();
+    for (const key of P.STAT_KEYS) {
+      const value = c?.fixed?.[key];
+      fixed[key] = value == null ? null : intIn(value, 0, P.MAX_LEVEL, null);
+    }
     return {
-      example: Boolean(raw.example),
-      coins: intIn(raw.coins, 0, 99999999, 0),
-      carry: intIn(raw.carry, 0, 99999999, 0),
-      carryMonth: typeof raw.carryMonth === "string" ? raw.carryMonth : "",
-      includeCurrent: raw.includeCurrent !== false,
-      characters,
+      id: idOf(c?.id, "c"),
+      name: String(c?.name ?? "").slice(0, 20),
+      weekly: intIn(c?.weekly, 0, MAX_WEEKLY, 1),
+      fixed,
+      nexon: sanitizeNexon(c?.nexon),
+      scheduler: typeof c?.scheduler === "string" && c.scheduler ? c.scheduler.slice(0, 64) : null,
     };
   }
 
-  function load() {
+  function sanitizeProfile(p, index) {
+    return {
+      id: idOf(p?.id, "p"),
+      name: String(p?.name ?? "").trim().slice(0, 20) || profileName(index),
+      coins: intIn(p?.coins, 0, 99999999, 0),
+      carry: intIn(p?.carry, 0, 99999999, 0),
+      carryMonth: typeof p?.carryMonth === "string" ? p.carryMonth.slice(0, 7) : "",
+      includeCurrent: p?.includeCurrent !== false,
+      characters: Array.isArray(p?.characters) ? p.characters.slice(0, MAX_CHARACTERS).map(sanitizeCharacter) : [],
+    };
+  }
+
+  /**
+   * 저장본이 깨졌거나 옛 형식이어도 화면이 뜨도록 값마다 확인한다.
+   * 넥슨 계정 탭이 없던 옛 형식({ coins, characters, … })은 탭 하나("넥슨 계정 1")로 옮긴다.
+   */
+  function sanitize(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const profiles = (Array.isArray(raw.profiles) ? raw.profiles.slice(0, MAX_PROFILES) : [raw]).map(sanitizeProfile);
+    if (!profiles.length) profiles.push(newProfile(profileName(0)));
+    const seen = new Set();
+    for (const p of profiles) {
+      if (seen.has(p.id)) p.id = uid("p");
+      seen.add(p.id);
+    }
+    const active = profiles.some((p) => p.id === raw.active) ? raw.active : profiles[0].id;
+    return { version: 2, example: Boolean(raw.example), active, profiles };
+  }
+
+  /** 스케줄러 계정에 저장하는 값(예시 표시는 뺀다). */
+  const exportState = () => ({ version: 2, active: state.active, profiles: state.profiles });
+
+  function loadLocal() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitize(JSON.parse(raw)) : null;
@@ -134,7 +160,7 @@
       return null;
     }
   }
-  function save() {
+  function saveLocal() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
@@ -142,7 +168,238 @@
     }
   }
 
-  let state = load() || exampleState();
+  let state = loadLocal() || exampleState();
+  /** 지금 보고 있는 넥슨 계정 탭. */
+  const cur = () => state.profiles.find((p) => p.id === state.active) || state.profiles[0];
+  const ownsCharacter = (c) => state.profiles.some((p) => p.characters.includes(c));
+
+  /* ---------- 스케줄러 계정 (같은 도메인의 /scheduler) ---------- */
+
+  /**
+   * 스케줄러에 로그인하면 계산기 값을 그 계정(스케줄러 DB)에 저장하고, 스케줄러에 등록한 캐릭터를 불러오며,
+   * 캐릭터 정보는 그 계정에 등록한 넥슨 API 키로 받는다. 세션 쿠키가 /scheduler 아래에만 가므로 화면이 스케줄러 API를 직접 부른다.
+   * 로그인 전에는 지금처럼 이 브라우저에 저장하고 계산기 서버의 키로 받는다.
+   *
+   * status: checking | off(이 주소에서는 스케줄러를 쓸 수 없음) | out(로그인 전) | loading | in
+   */
+  const scheduler = {
+    path: "",
+    status: "checking",
+    account: null,
+    nexon: false,
+    characters: [],
+    base: null,
+    dirty: false,
+    inFlight: false,
+    again: false,
+    timer: 0,
+    save: "saved",
+    note: "",
+    noteBad: false,
+  };
+  const signedIn = () => scheduler.status === "in";
+  const SAVE_DELAY_MS = 800;
+
+  async function schedulerApi(path, init = {}) {
+    const headers = typeof init.body === "string" ? { "content-type": "application/json" } : {};
+    let response;
+    try {
+      response = await fetch(`${scheduler.path}${path}`, { cache: "no-store", credentials: "same-origin", ...init, headers });
+    } catch {
+      throw Object.assign(new Error("스케줄러에 연결하지 못했습니다."), { status: 0 });
+    }
+    const json = (response.headers.get("content-type") || "").includes("json");
+    const body = json ? await response.json().catch(() => null) : null;
+    if (!response.ok || !json) {
+      const message = body?.error || (response.status === 404 ? "스케줄러에 이 기능이 없습니다. 스케줄러를 업데이트하세요." : `스케줄러 오류(${response.status})입니다.`);
+      throw Object.assign(new Error(message), { status: response.ok ? 502 : response.status, body });
+    }
+    return body;
+  }
+
+  /** 스케줄러 캐릭터 → 계산기 캐릭터의 넥슨 정보. */
+  const nexonOf = (sc) => sanitizeNexon({ name: sc.name, image: sc.image, level: sc.level, job: sc.className, world: sc.world, fetchedAt: Date.now() });
+  const schedulerById = (id) => scheduler.characters.find((sc) => sc.id === id);
+  const schedulerByName = (name) => scheduler.characters.find((sc) => sc.name === name.trim());
+
+  /** 계산기 캐릭터를 스케줄러 캐릭터와 잇고 이미지·레벨을 스케줄러 값으로 바꾼다. 스케줄러에서 지운 캐릭터는 연결만 푼다. */
+  function linkSchedulerCharacters(target = state) {
+    for (const p of target.profiles) {
+      for (const c of p.characters) {
+        const sc = (c.scheduler && schedulerById(c.scheduler)) || (!c.scheduler && c.name.trim() ? schedulerByName(c.name) : null);
+        if (!sc) {
+          if (c.scheduler) c.scheduler = null;
+          continue;
+        }
+        c.scheduler = sc.id;
+        c.name = sc.name;
+        c.nexon = nexonOf(sc) || c.nexon;
+      }
+    }
+  }
+
+  /** 어느 넥슨 계정 탭에도 없는 스케줄러 캐릭터. */
+  function unusedSchedulerCharacters(target = state) {
+    const ids = new Set();
+    const names = new Set();
+    for (const p of target.profiles) {
+      for (const c of p.characters) {
+        if (c.scheduler) ids.add(c.scheduler);
+        names.add(c.name.trim());
+      }
+    }
+    return scheduler.characters.filter((sc) => !ids.has(sc.id) && !names.has(sc.name));
+  }
+
+  function addSchedulerCharacters(profile, list) {
+    for (const sc of list) {
+      if (profile.characters.length >= MAX_CHARACTERS) break;
+      profile.characters.push(newCharacter(sc.name, { scheduler: sc.id, nexon: nexonOf(sc) }));
+    }
+  }
+
+  function setNote(text, bad = false) {
+    scheduler.note = text;
+    scheduler.noteBad = bad;
+    renderAccount();
+  }
+
+  function setSaveState(value, message = "") {
+    scheduler.save = value;
+    if (message) setNote(message, value === "error");
+    else renderAccount();
+  }
+
+  function queueRemoteSave() {
+    scheduler.dirty = true;
+    setSaveState("saving");
+    clearTimeout(scheduler.timer);
+    scheduler.timer = setTimeout(() => flushRemote(), SAVE_DELAY_MS);
+  }
+
+  /** 바뀐 값을 스케줄러에 저장한다. 한 번에 하나씩 보내고, 보내는 사이 또 바뀌면 끝난 뒤 한 번 더 보낸다. */
+  async function flushRemote({ keepalive = false } = {}) {
+    clearTimeout(scheduler.timer);
+    if (!signedIn() || !scheduler.dirty) return;
+    if (scheduler.inFlight) {
+      scheduler.again = true;
+      return;
+    }
+    const account = scheduler.account;
+    scheduler.dirty = false;
+    scheduler.inFlight = true;
+    try {
+      const body = await schedulerApi("/api/gaho", { method: "PUT", body: JSON.stringify({ state: exportState(), base: scheduler.base }), keepalive });
+      if (scheduler.account !== account) return;
+      scheduler.base = body.updatedAt;
+      setSaveState(scheduler.dirty ? "saving" : "saved");
+    } catch (error) {
+      if (scheduler.account !== account) return;
+      if (error.status === 409 && error.body?.state) {
+        adoptRemote(error.body.state, error.body.updatedAt);
+        setSaveState("saved", "다른 기기나 창에서 먼저 저장한 값이 있어 그 값으로 바꿨습니다.");
+      } else if (error.status === 401) {
+        signedOut("스케줄러 로그인이 끝났습니다. 다시 로그인하세요.", true);
+      } else {
+        scheduler.dirty = true;
+        setSaveState("error", `스케줄러에 저장하지 못했습니다. ${error.message}`);
+      }
+    } finally {
+      scheduler.inFlight = false;
+      if (scheduler.again) {
+        scheduler.again = false;
+        flushRemote();
+      }
+    }
+  }
+
+  function adoptRemote(raw, updatedAt) {
+    state = sanitize(raw) || sanitize({ profiles: [newProfile(profileName(0))] });
+    state.example = false;
+    scheduler.base = updatedAt ?? null;
+    scheduler.dirty = false;
+    linkSchedulerCharacters();
+    renderAll();
+  }
+
+  /**
+   * 로그인한 계정의 값과 스케줄러 캐릭터를 불러온다. 처음이면 이 브라우저에 넣어 둔 값(예시가 아니면)을 첫 넥슨 계정 탭으로 옮기고,
+   * 스케줄러에 등록한 캐릭터를 모두 넣어 바로 저장한다.
+   */
+  async function enterAccount(account) {
+    scheduler.status = "loading";
+    scheduler.account = account;
+    renderAccount();
+    try {
+      const [saved, list] = await Promise.all([schedulerApi("/api/gaho"), schedulerApi("/api/characters")]);
+      if (scheduler.account !== account) return;
+      scheduler.characters = (Array.isArray(list?.characters) ? list.characters : [])
+        .filter((sc) => sc && typeof sc.id === "string" && typeof sc.name === "string");
+      scheduler.nexon = Boolean(list?.nexon);
+      scheduler.status = "in";
+      if (saved?.state) {
+        adoptRemote(saved.state, saved.updatedAt);
+        setSaveState("saved", "");
+      } else {
+        const first = state.example ? sanitize({ profiles: [newProfile(profileName(0))] }) : sanitize(JSON.parse(JSON.stringify(state)));
+        first.example = false;
+        const moved = !state.example;
+        linkSchedulerCharacters(first);
+        const added = unusedSchedulerCharacters(first);
+        addSchedulerCharacters(first.profiles.find((p) => p.id === first.active) || first.profiles[0], added);
+        state = first;
+        scheduler.base = null;
+        renderAll();
+        scheduler.dirty = true;
+        setNote([moved ? "이 브라우저에 넣어 둔 값을 스케줄러 계정으로 옮겼습니다." : "", added.length ? `스케줄러에 등록한 캐릭터 ${added.length}명을 넣었습니다.` : ""].filter(Boolean).join(" "));
+        await flushRemote();
+      }
+      refreshStale();
+    } catch (error) {
+      if (scheduler.account !== account) return;
+      Object.assign(scheduler, { status: "out", account: null, characters: [], nexon: false });
+      setNote(`스케줄러 계정의 값을 불러오지 못해 이 브라우저에 저장합니다. ${error.message}`, true);
+      renderAll();
+    }
+  }
+
+  function signedOut(message, bad = false) {
+    clearTimeout(scheduler.timer);
+    Object.assign(scheduler, { status: "out", account: null, characters: [], nexon: false, base: null, dirty: false, save: "saved" });
+    state = loadLocal() || exampleState();
+    renderAll();
+    setNote(message, bad);
+  }
+
+  async function login(username, password) {
+    const body = await schedulerApi("/api/session", { method: "POST", body: JSON.stringify({ mode: "login", username, password }) });
+    if (!body?.account) throw new Error("로그인하지 못했습니다.");
+    await enterAccount(body.account);
+  }
+
+  async function logout() {
+    await flushRemote();
+    try {
+      await schedulerApi("/api/session", { method: "DELETE" });
+    } catch {
+      /* 이미 끝난 세션이어도 화면은 로그아웃한다. */
+    }
+    signedOut("로그아웃했습니다. 스케줄러에서도 로그아웃됩니다. 이 브라우저에 넣어 둔 값으로 돌아왔습니다.");
+  }
+
+  // 창을 닫거나 다른 앱으로 옮길 때 아직 못 보낸 값을 보낸다.
+  const flushOnLeave = () => {
+    if (scheduler.dirty) flushRemote({ keepalive: true });
+  };
+  window.addEventListener("pagehide", flushOnLeave);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnLeave();
+  });
+
+  function save() {
+    if (signedIn()) queueRemoteSave();
+    else saveLocal();
+  }
 
   /** 사용자가 값을 바꿨다. 예시 표시를 끄고 저장한 뒤 결과를 다시 그린다. */
   function touch() {
@@ -152,33 +409,66 @@
     renderResults();
   }
 
-  const weeksNow = () => P.remainingWeeks(today, state.includeCurrent);
-  const carryNow = () => (carryOpen && state.carryMonth === monthKey ? state.carry : 0);
+  const weeksNow = () => P.remainingWeeks(today, cur().includeCurrent);
+  const carryNow = () => (carryOpen && cur().carryMonth === monthKey ? cur().carry : 0);
   const md = (d) => `${d.month}/${d.day}`;
   const range = (w) => (w.start.month === w.end.month && w.start.day === w.end.day ? md(w.start) : `${md(w.start)}~${md(w.end)}`);
 
-  /* ---------- 캐릭터 이미지 (넥슨 Open API, 계산기 서버가 대신 부른다) ---------- */
+  /* ---------- 캐릭터 이미지 (넥슨 Open API) ---------- */
 
   /**
-   * checking → ready(서버에 넥슨 키가 있음) | no-key(서버는 있는데 키가 없음) | offline(서버 없이 파일로 열었거나 미리보기).
-   * 넥슨 키는 서버의 .env에만 있고 화면은 /api/character만 부른다.
+   * 계산기 서버의 키: checking → ready(서버에 넥슨 키가 있음) | no-key | offline(서버 없이 파일로 열었거나 미리보기).
+   * 스케줄러에 로그인하면 서버의 키 대신 그 계정에 등록한 키(스케줄러 /api/gaho/character)로 받는다.
    */
   let imageService = "checking";
 
-  async function checkImageService() {
+  /** 캐릭터 정보를 어디서 받을지. 로그인하면 그 계정의 키, 로그인 전에는 계산기 서버의 키. */
+  function lookupSource() {
+    if (signedIn()) return scheduler.nexon ? "scheduler" : null;
+    return imageService === "ready" ? "server" : null;
+  }
+
+  /** 계산기 서버 설정(넥슨 키가 있는지, 스케줄러 주소)을 받고, 스케줄러에 로그인돼 있으면 그 계정으로 들어간다. */
+  async function checkServices() {
+    let status = null;
     try {
       const response = await fetch("api/status", { cache: "no-store" });
-      const body = response.ok ? await response.json() : null;
-      imageService = body ? (body.nexon ? "ready" : "no-key") : "offline";
+      status = response.ok ? await response.json() : null;
     } catch {
-      imageService = "offline";
+      status = null;
     }
+    imageService = status ? (status.nexon ? "ready" : "no-key") : "offline";
+    scheduler.path = typeof status?.scheduler === "string" ? status.scheduler : "";
     renderImageNote();
+    if (!scheduler.path) {
+      scheduler.status = "off";
+      renderAccount();
+      return;
+    }
+    try {
+      const body = await schedulerApi("/api/session");
+      if (!body || !("account" in body)) throw new Error();
+      if (body.account) await enterAccount(body.account);
+      else {
+        scheduler.status = "out";
+        renderAccount();
+      }
+    } catch {
+      scheduler.status = "off";
+      renderAccount();
+    }
   }
 
   const lookupError = (short, message) => Object.assign(new Error(message), { short });
 
   async function fetchCharacter(name) {
+    if (lookupSource() === "scheduler") {
+      try {
+        return await schedulerApi(`/api/gaho/character?name=${encodeURIComponent(name)}`);
+      } catch (error) {
+        throw lookupError(error.status === 404 ? "캐릭터를 찾지 못함" : "불러오기 실패", error.message);
+      }
+    }
     let response;
     try {
       response = await fetch(`api/character?name=${encodeURIComponent(name)}`, { cache: "no-store" });
@@ -195,12 +485,24 @@
 
   async function loadCharacter(c) {
     const name = c.name.trim();
-    if (imageService !== "ready" || !name) return;
+    if (!name) return;
+    // 스케줄러에 등록한 캐릭터면 넥슨을 부르지 않고 스케줄러 값을 쓴다.
+    const sc = signedIn() ? (c.scheduler && schedulerById(c.scheduler)) || schedulerByName(name) : null;
+    if (sc) {
+      c.scheduler = sc.id;
+      c.nexon = nexonOf(sc) || c.nexon;
+      nexonStatus.delete(c.id);
+      save();
+      refreshCharacterView(c);
+      renderResults();
+      return;
+    }
+    if (!lookupSource()) return;
     nexonStatus.set(c.id, { state: "loading" });
     refreshCharacterView(c);
     try {
       const data = await fetchCharacter(name);
-      if (c.name.trim() !== name || !state.characters.includes(c)) return;
+      if (c.name.trim() !== name || !ownsCharacter(c)) return;
       c.nexon = sanitizeNexon({ ...data, fetchedAt: Date.now() });
       nexonStatus.delete(c.id);
       save();
@@ -221,12 +523,45 @@
     else setImageMessage(`${failed.length}명은 불러오지 못했습니다. ${nexonStatus.get(failed[0].id).message}`, true);
   }
 
-  const IMAGE_NOTES = {
-    checking: "",
-    ready: "캐릭터 이미지·레벨·직업은 넥슨 Open API에서 가져옵니다.",
-    "no-key": "서버 .env에 NEXON_API_KEY를 넣고 서버를 다시 시작하면 캐릭터 이미지가 나옵니다.",
-    offline: "캐릭터 이미지는 계산기 서버(npm start)로 열었을 때 나옵니다.",
-  };
+  /** 하루 지난 캐릭터 정보만 다시 받는다(코디를 바꾸면 이미지 주소가 바뀐다). 스케줄러 캐릭터는 스케줄러 값을 쓴다. */
+  function refreshStale() {
+    if (state.example || (!lookupSource() && !signedIn())) return;
+    const stale = cur().characters.filter((c) => c.name.trim() && !c.scheduler && (!c.nexon || Date.now() - c.nexon.fetchedAt > NEXON_STALE_MS));
+    if (lookupSource()) loadAll(stale);
+  }
+
+  /** 새로고침: 로그인했으면 스케줄러 캐릭터 목록을 다시 받고, 나머지는 넥슨에서 다시 받는다. */
+  async function refreshImages() {
+    if (signedIn()) {
+      try {
+        const list = await schedulerApi("/api/characters");
+        scheduler.characters = (Array.isArray(list?.characters) ? list.characters : []).filter((sc) => sc && typeof sc.id === "string" && typeof sc.name === "string");
+        scheduler.nexon = Boolean(list?.nexon);
+        linkSchedulerCharacters();
+        save();
+        renderCharacters();
+        renderResults();
+      } catch (error) {
+        setImageMessage(`스케줄러 캐릭터를 불러오지 못했습니다. ${error.message}`, true);
+        return;
+      }
+    }
+    loadAll(cur().characters.filter((c) => c.name.trim() && !c.scheduler));
+  }
+
+  function imageNote() {
+    if (signedIn()) {
+      return scheduler.nexon
+        ? `캐릭터 이미지·레벨·직업은 스케줄러 계정(${scheduler.account.username})에 등록한 넥슨 API 키로 불러옵니다.`
+        : "스케줄러 계정에 넥슨 API 키를 등록하면 캐릭터 이미지가 나옵니다(스케줄러 왼쪽 위 '넥슨 API 키').";
+    }
+    return {
+      checking: "",
+      ready: "캐릭터 이미지·레벨·직업은 넥슨 Open API에서 가져옵니다.",
+      "no-key": "서버 .env에 NEXON_API_KEY를 넣고 서버를 다시 시작하면 캐릭터 이미지가 나옵니다. 스케줄러에 로그인하면 그 계정의 키로 불러옵니다.",
+      offline: "캐릭터 이미지는 계산기 서버(npm start)로 열었을 때 나옵니다.",
+    }[imageService];
+  }
 
   function setImageMessage(text, bad = false) {
     const node = $("#image-note-text");
@@ -235,9 +570,9 @@
   }
 
   function renderImageNote() {
-    $("#image-note").hidden = imageService === "checking";
-    $("#image-refresh").hidden = imageService !== "ready";
-    setImageMessage(IMAGE_NOTES[imageService]);
+    $("#image-note").hidden = imageService === "checking" && !signedIn();
+    $("#image-refresh").hidden = !lookupSource() && !signedIn();
+    setImageMessage(imageNote());
   }
 
   /** 넥슨 캐릭터 이미지(96×96, 투명 배경). 없으면 이름 첫 글자. */
@@ -314,15 +649,15 @@
 
   /* ---------- 이번 달 획득 코인 ---------- */
 
-  function renderSetup() {
+  /** 입력 칸에 이벤트를 한 번 건다. 값은 지금 보고 있는 넥슨 계정 탭(cur())에 넣는다. */
+  function bindSetup() {
     const coins = $("#coins");
-    coins.value = fmt(state.coins);
     coins.addEventListener("input", () => {
-      state.coins = intIn(coins.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
+      cur().coins = intIn(coins.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
       touch();
     });
     coins.addEventListener("blur", () => {
-      coins.value = fmt(state.coins);
+      coins.value = fmt(cur().coins);
     });
 
     // 지난달에서 이월된 코인은 1~7일에만 남는다. 그 밖에는 칸을 보여 주되 닫아 둔다.
@@ -333,11 +668,10 @@
     when.classList.toggle("is-open", carryOpen);
     const carry = $("#carry");
     carry.disabled = !carryOpen;
-    carry.value = carryOpen ? fmt(carryNow()) : "";
     if (!carryOpen) carry.placeholder = "—";
     carry.addEventListener("input", () => {
-      state.carry = intIn(carry.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
-      state.carryMonth = monthKey;
+      cur().carry = intIn(carry.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
+      cur().carryMonth = monthKey;
       touch();
     });
     carry.addEventListener("blur", () => {
@@ -348,18 +682,19 @@
     }
 
     const include = $("#include-current");
-    include.checked = state.includeCurrent;
     include.addEventListener("change", () => {
-      state.includeCurrent = include.checked;
+      cur().includeCurrent = include.checked;
       touch();
     });
 
     $("#add-form").addEventListener("submit", (event) => {
       event.preventDefault();
       const input = $("#new-name");
+      const list = cur().characters;
+      if (list.length >= MAX_CHARACTERS) return setImageMessage(`넥슨 계정 하나에 캐릭터는 ${MAX_CHARACTERS}명까지 넣을 수 있습니다.`, true);
       const typed = input.value.trim().slice(0, 20);
-      const c = { id: uid(), name: typed || `캐릭터 ${state.characters.length + 1}`, weekly: 1, fixed: emptyFixed(), nexon: null };
-      state.characters.push(c);
+      const c = newCharacter(typed || `캐릭터 ${list.length + 1}`);
+      list.push(c);
       input.value = "";
       renderCharacters();
       touch();
@@ -367,15 +702,181 @@
     });
 
     $("#clear-example").addEventListener("click", () => {
-      state = { ...state, example: false, coins: 0, carry: 0, characters: [] };
-      $("#coins").value = "0";
-      if (carryOpen) $("#carry").value = "0";
+      Object.assign(cur(), { coins: 0, carry: 0, characters: [] });
+      syncSetup();
       renderCharacters();
       touch();
       $("#coins").focus();
     });
 
-    $("#image-refresh").addEventListener("click", () => loadAll(state.characters.filter((c) => c.name.trim())));
+    $("#image-refresh").addEventListener("click", () => refreshImages());
+
+    $("#picker-all").addEventListener("click", () => {
+      addSchedulerCharacters(cur(), unusedSchedulerCharacters());
+      renderCharacters();
+      touch();
+    });
+
+    bindAccount();
+  }
+
+  /** 넥슨 계정 탭을 바꾸거나 값을 새로 불러오면 입력 칸을 그 탭의 값으로 채운다. */
+  function syncSetup() {
+    $("#coins").value = fmt(cur().coins);
+    $("#carry").value = carryOpen ? fmt(carryNow()) : "";
+    $("#include-current").checked = cur().includeCurrent;
+  }
+
+  /* ---------- 스케줄러 계정 · 넥슨 계정 탭 ---------- */
+
+  function bindAccount() {
+    $("#login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = $("#login-form button[type=submit]");
+      const username = $("#login-id").value.trim();
+      const password = $("#login-password").value;
+      if (!username || !password) return;
+      button.disabled = true;
+      setNote("로그인하는 중입니다.");
+      try {
+        await login(username, password);
+        $("#login-password").value = "";
+      } catch (error) {
+        setNote(error.message || "로그인하지 못했습니다.", true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    $("#logout").addEventListener("click", () => logout());
+    $("#save-retry").addEventListener("click", () => {
+      scheduler.dirty = true;
+      flushRemote();
+    });
+
+    $("#profile-add").addEventListener("click", () => {
+      if (state.profiles.length >= MAX_PROFILES) return;
+      const profile = newProfile(profileName(state.profiles.length));
+      state.profiles.push(profile);
+      state.active = profile.id;
+      state.example = false;
+      save();
+      renderAll();
+      $("#profile-name").select();
+    });
+    const name = $("#profile-name");
+    name.addEventListener("input", () => {
+      cur().name = name.value.slice(0, 20);
+      save();
+      renderTabs();
+    });
+    name.addEventListener("blur", () => {
+      if (!cur().name.trim()) {
+        cur().name = profileName(state.profiles.indexOf(cur()));
+        save();
+      }
+      renderTabs();
+    });
+    $("#profile-delete").addEventListener("click", () => {
+      const profile = cur();
+      if (state.profiles.length <= 1) return;
+      const count = profile.characters.length;
+      if (!window.confirm(`'${profile.name}' 넥슨 계정${count ? `과 캐릭터 ${count}명` : ""}을 지울까요?`)) return;
+      state.profiles = state.profiles.filter((p) => p !== profile);
+      state.active = state.profiles[0].id;
+      state.example = false;
+      save();
+      renderAll();
+    });
+  }
+
+  function renderAccount() {
+    const status = scheduler.status;
+    const node = $("#account-status");
+    const form = $("#login-form");
+    form.hidden = status !== "out";
+    $("#logout").hidden = status !== "in";
+    $("#save-retry").hidden = !(status === "in" && scheduler.save === "error");
+    const link = $("#scheduler-link");
+    link.hidden = !scheduler.path || status === "off" || status === "checking";
+    if (scheduler.path) link.href = `${scheduler.path}/`;
+    let text;
+    if (status === "checking") text = "확인하는 중…";
+    else if (status === "off") text = "이 주소에서는 쓸 수 없음 · 이 브라우저에 저장";
+    else if (status === "out") text = "로그인 전 · 이 브라우저에 저장";
+    else if (status === "loading") text = `${scheduler.account.username} · 불러오는 중…`;
+    else text = `${scheduler.account.username} · ${{ saved: "스케줄러에 저장됨", saving: "저장하는 중…", error: "저장 실패" }[scheduler.save]}`;
+    node.textContent = text;
+    node.classList.toggle("bad", status === "in" && scheduler.save === "error");
+    const hint = $("#account-hint");
+    const base = {
+      off: "스케줄러 로그인은 스케줄러와 같은 주소(예: 19991115.xyz/gaho/)로 열었을 때 쓸 수 있습니다.",
+      out: "스케줄러 계정으로 로그인하면 넥슨 계정별 값을 그 계정에 저장해 어느 기기에서나 이어 쓰고, 스케줄러에 등록한 캐릭터와 그 계정의 넥슨 API 키를 씁니다.",
+      in: "값은 스케줄러 계정에 저장됩니다. 로그아웃하면 스케줄러에서도 로그아웃됩니다.",
+    }[status] || "";
+    hint.textContent = scheduler.note || base;
+    hint.classList.toggle("bad", scheduler.noteBad);
+    renderImageNote();
+  }
+
+  function renderTabs() {
+    const active = cur();
+    $("#profile-tabs").replaceChildren(...state.profiles.map((p) =>
+      h("button", {
+        type: "button",
+        role: "tab",
+        class: `profile-tab${p === active ? " is-active" : ""}`,
+        "aria-selected": p === active ? "true" : "false",
+        onclick: () => {
+          if (p === cur()) return;
+          state.active = p.id;
+          save();
+          renderAll();
+        },
+      }, p.name.trim() || "이름 없음", h("span", { class: "profile-count" }, `${p.characters.length}명`))));
+    $("#profile-add").disabled = state.profiles.length >= MAX_PROFILES;
+    const name = $("#profile-name");
+    if (document.activeElement !== name) name.value = active.name;
+    $("#profile-delete").disabled = state.profiles.length <= 1;
+  }
+
+  /** 로그인했을 때: 어느 넥슨 계정 탭에도 없는 스케줄러 캐릭터를 골라 넣는다. */
+  function renderPicker() {
+    const box = $("#scheduler-picker");
+    box.hidden = !signedIn();
+    if (!signedIn()) return;
+    const unused = unusedSchedulerCharacters();
+    $("#picker-all").hidden = unused.length < 2;
+    $("#picker-list").replaceChildren(...unused.map((sc) => {
+      const view = { name: sc.name, nexon: nexonOf(sc) };
+      return h("li", null,
+        h("button", {
+          type: "button",
+          class: "picker-item",
+          title: `${sc.name} 추가`,
+          onclick: () => {
+            if (cur().characters.length >= MAX_CHARACTERS) return;
+            addSchedulerCharacters(cur(), [sc]);
+            renderCharacters();
+            touch();
+          },
+        }, avatar(view, "xs"), h("span", null, sc.name), sc.level ? h("span", { class: "picker-level" }, `Lv.${sc.level}`) : null, h("span", { class: "picker-add" }, "+ 추가")));
+    }));
+    $("#picker-hint").textContent = !scheduler.characters.length
+      ? "스케줄러에 등록한 캐릭터가 없습니다. 스케줄러의 주간 보스 탭에서 캐릭터를 등록하면 여기에 나옵니다."
+      : unused.length
+        ? "스케줄러에 등록한 캐릭터 중 어느 넥슨 계정 탭에도 없는 캐릭터입니다. 누르면 지금 탭에 넣습니다. 탭에서 지운 캐릭터는 다시 여기에 나옵니다."
+        : "스케줄러에 등록한 캐릭터를 모두 넣었습니다. 탭에서 지우면 다시 여기에 나옵니다.";
+  }
+
+  /** 상태를 통째로 바꿨을 때(탭 전환·로그인·로그아웃) 화면 전체를 다시 그린다. */
+  function renderAll() {
+    nexonStatus.clear();
+    renderTabs();
+    syncSetup();
+    renderExampleNote();
+    renderCharacters();
+    renderAccount();
+    renderResults();
   }
 
   function renderWeeks(plan) {
@@ -386,7 +887,7 @@
     $("#today-label").textContent = `오늘 ${today.month}월 ${today.day}일(${WEEKDAYS[today.weekday]}) 기준 ${deadline.month}월 ${deadline.day}일(이월 기한)까지 남은 주`;
     $("#weeks-count").textContent = `${used.weeks.length}주`;
     $("#week-chips").replaceChildren(...all.weeks.map((w) => {
-      const off = w.current && !state.includeCurrent;
+      const off = w.current && !cur().includeCurrent;
       const tag = w.current ? (off ? "빼고 계산" : "이번 주") : w.nextMonth ? "이월" : null;
       return h("li", { class: `week-chip${w.current ? " is-current" : ""}${off ? " is-off" : ""}` },
         range(w),
@@ -464,7 +965,9 @@
     const list = $("#char-list");
     list.replaceChildren();
     rowViews.clear();
-    if (!state.characters.length) {
+    renderPicker();
+    renderTabs();
+    if (!cur().characters.length) {
       list.append(h("p", { class: "empty" }, "아직 캐릭터가 없습니다. 위 칸에 이름을 넣고 캐릭터 추가를 누르세요."));
       return;
     }
@@ -476,7 +979,7 @@
         h("span", null, "한 번에"),
         h("span", null, "")),
     );
-    for (const c of state.characters) {
+    for (const c of cur().characters) {
       list.append(charRow(c));
       refreshCharacterView(c);
     }
@@ -503,7 +1006,8 @@
         touch();
       },
       onchange: () => {
-        // 이름이 바뀌면 예전 이미지는 다른 캐릭터의 것이다.
+        // 이름이 바뀌면 예전 이미지·스케줄러 연결은 다른 캐릭터의 것이다.
+        if (c.scheduler && schedulerById(c.scheduler)?.name !== c.name.trim()) c.scheduler = null;
         if (c.nexon && c.nexon.name !== c.name.trim()) {
           c.nexon = null;
           nexonStatus.delete(c.id);
@@ -555,7 +1059,7 @@
       "aria-label": "이 캐릭터 삭제",
       title: "삭제",
       onclick: () => {
-        state.characters = state.characters.filter((x) => x !== c);
+        cur().characters = cur().characters.filter((x) => x !== c);
         nexonStatus.delete(c.id);
         renderCharacters();
         touch();
@@ -580,11 +1084,11 @@
   function renderResults() {
     const weeks = weeksNow();
     const plan = P.buildPlan({
-      coins: state.coins,
+      coins: cur().coins,
       carry: carryNow(),
       carryWeeks: weeks.carryWeeks,
       weeks: weeks.weeks.length,
-      characters: state.characters,
+      characters: cur().characters,
     });
     const rows = P.buildSchedule(plan);
     renderWeeks(plan);
@@ -599,7 +1103,7 @@
 
   const activeChars = (plan) => plan.chars.filter((c) => c.uses > 0);
   /** 화면 상태(state)의 캐릭터. plan.chars와 순서가 같다. */
-  const sourceOf = (index) => state.characters[index];
+  const sourceOf = (index) => cur().characters[index];
 
   function renderStatus(plan) {
     const chip = $("#status-chip");
@@ -872,14 +1376,10 @@
 
   /* ---------- 시작 ---------- */
 
-  renderSetup();
-  renderExampleNote();
-  renderCharacters();
-  renderResults();
+  bindSetup();
+  renderAll();
 
-  checkImageService().then(() => {
-    if (imageService !== "ready" || state.example) return;
-    const stale = state.characters.filter((c) => c.name.trim() && (!c.nexon || Date.now() - c.nexon.fetchedAt > NEXON_STALE_MS));
-    loadAll(stale);
+  checkServices().then(() => {
+    if (!signedIn()) refreshStale();
   });
 })();

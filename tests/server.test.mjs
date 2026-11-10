@@ -92,7 +92,7 @@ test("서버는 /gaho 아래에서 화면 파일과 API만 내주고 .env·서�
     assert.equal((await fetch(`${origin}${path}`, { redirect: "manual" })).status, 404, path);
   }
 
-  assert.deepEqual(await (await fetch(`${base}/api/status`)).json(), { nexon: true });
+  assert.deepEqual(await (await fetch(`${base}/api/status`)).json(), { nexon: true, scheduler: "/scheduler" });
   const character = await fetch(`${base}/api/character?name=${encodeURIComponent("아델본캐")}`);
   assert.equal(character.status, 200);
   assert.equal((await character.json()).job, "아델");
@@ -152,7 +152,12 @@ test("BASE_PATH를 비우면 맨 앞(/)에서 연다", async (t) => {
   assert.equal(normalizeBasePath("/"), "");
   const origin = await listen(t, { nexon: createNexon({ apiKey: "" }), basePath: "" });
   assert.equal((await fetch(`${origin}/`)).status, 200);
-  assert.deepEqual(await (await fetch(`${origin}/api/status`)).json(), { nexon: false });
+  assert.deepEqual(await (await fetch(`${origin}/api/status`)).json(), { nexon: false, scheduler: "/scheduler" });
+});
+
+test("SCHEDULER_PATH를 비우면 화면에 스케줄러 로그인을 끄라고 알린다", async (t) => {
+  const origin = await listen(t, { nexon: createNexon({ apiKey: "" }), schedulerPath: "" });
+  assert.deepEqual(await (await fetch(`${origin}/gaho/api/status`)).json(), { nexon: false, scheduler: "" });
 });
 
 test(".env는 BOM이 붙어 있어도 첫 줄 키를 읽고, 이미 있는 환경 변수는 덮지 않는다", () => {
