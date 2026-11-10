@@ -6,13 +6,15 @@
  * /gaho로 시작하는 요청을 경로 그대로 이 서버로 넘긴다. 화면은 상대 경로로 파일과 API를 부르므로
  * 주소가 /gaho/처럼 /로 끝나야 해서, /gaho와 /는 /gaho/로 보낸다.
  *
- *   GET /gaho/                     화면(index.html, styles.css, app.js, plan.js, icon.svg만 내준다)
+ *   GET /gaho/                     화면(index.html, styles.css, app.js, plan.js, icon.svg만 내준다).
+ *                                  index.html은 스크립트·스타일을 내용 해시가 붙은 이름(app.1a2b3c4d5e.js)으로 부른다.
  *   GET /gaho/api/status           { nexon: 키가 있는지 }
  *   GET /gaho/api/character?name=  { name, image, level, job, world } 또는 { error: { code, short, message } }
  *
  * 설정은 같은 폴더의 .env(.env.example 참고) 또는 환경 변수: PORT(기본 3400), HOST(기본 127.0.0.1),
  * BASE_PATH(기본 /gaho, 빈 값이면 /에서 연다), NEXON_API_KEY, NEXON_DAILY_LIMIT(기본 300).
  */
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -31,6 +33,26 @@ const STATIC_FILES = {
   "/plan.js": "plan.js",
   "/icon.svg": "icon.svg",
 };
+/**
+ * 화면이 부르는 스크립트·스타일. index.html은 이 파일들을 내용 해시가 붙은 이름(app.1a2b3c4d5e.js)으로 부른다.
+ * 코드를 받은 뒤에도 브라우저나 Cloudflare가 지난 app.js·styles.css를 들고 있으면 새 index.html과 짝이 맞지 않아
+ * 화면이 멈춘다. 내용이 바뀌면 주소가 바뀌므로 늘 index.html과 같은 판의 파일을 받는다.
+ */
+const ASSETS = ["styles.css", "plan.js", "app.js"];
+const VERSIONED = /^\/(styles|plan|app)\.([0-9a-f]{10})\.(css|js)$/;
+const hashOf = (body) => createHash("sha256").update(body).digest("hex").slice(0, 10);
+const LONG_CACHE = "public, max-age=31536000, immutable";
+
+/** index.html의 styles.css·plan.js·app.js를 내용 해시가 붙은 이름으로 바꾼다. */
+async function linkAssets(html, root) {
+  for (const file of ASSETS) {
+    const hash = hashOf(await readFile(join(root, file)));
+    const name = file.replace(/\.(\w+)$/, `.${hash}.$1`);
+    html = html.replaceAll(`"${file}"`, `"${name}"`);
+  }
+  return html;
+}
+
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -98,11 +120,16 @@ export function createAppServer({ nexon, basePath = "/gaho", root = ROOT, log = 
         }
       }
 
-      const file = STATIC_FILES[path];
-      if (!file) return send(res, 404, { "content-type": "text/plain; charset=utf-8" }, "찾는 페이지가 없습니다.");
-      const body = await readFile(join(root, file));
-      const headers = { "content-type": TYPES[extname(file)], "cache-control": "no-cache" };
+      const asset = VERSIONED.exec(path);
+      const file = asset ? `${asset[1]}.${asset[3]}` : STATIC_FILES[path];
+      if (!file || (asset && !ASSETS.includes(file))) return send(res, 404, { "content-type": "text/plain; charset=utf-8" }, "찾는 페이지가 없습니다.");
+      let body = await readFile(join(root, file));
+      if (file === "index.html") body = Buffer.from(await linkAssets(body.toString("utf8"), root));
+      const hash = hashOf(body);
+      // 해시가 맞는 이름이면 그 내용은 바뀌지 않으므로 오래 둔다. 해시가 지난 것(옛 index.html)이면 지금 파일을 주되 캐시하지 않는다.
+      const headers = { "content-type": TYPES[extname(file)], "cache-control": asset && asset[2] === hash ? LONG_CACHE : "no-cache", etag: `"${hash}"` };
       if (file === "index.html") headers["content-security-policy"] = CSP;
+      if (req.headers["if-none-match"] === headers.etag) return send(res, 304, headers, undefined);
       return send(res, 200, headers, req.method === "HEAD" ? undefined : body);
     } catch (error) {
       log(`[server] ${error?.stack || error}`);

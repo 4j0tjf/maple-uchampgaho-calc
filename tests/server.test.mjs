@@ -102,6 +102,42 @@ test("서버는 /gaho 아래에서 화면 파일과 API만 내주고 .env·서�
   assert.equal((await fetch(`${base}/api/status`, { method: "POST" })).status, 405);
 });
 
+test("index.html은 스크립트·스타일을 내용 해시가 붙은 이름으로 불러, 지난 파일이 캐시에 남아도 짝이 어긋나지 않는다", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "gaho-root-"));
+  writeFileSync(join(root, "index.html"), '<link rel="stylesheet" href="styles.css"><script src="plan.js"></script><script src="app.js"></script>');
+  writeFileSync(join(root, "styles.css"), "body{}");
+  writeFileSync(join(root, "plan.js"), "var plan = 1;");
+  writeFileSync(join(root, "app.js"), "var app = 1;");
+  const base = `${await listen(t, { nexon: createNexon({ apiKey: "" }), root })}/gaho`;
+  const linked = async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    return Object.fromEntries([...html.matchAll(/"((styles|plan|app)\.[0-9a-f]{10}\.(?:css|js))"/g)].map((m) => [m[2], m[1]]));
+  };
+
+  const first = await linked();
+  assert.deepEqual(Object.keys(first).sort(), ["app", "plan", "styles"]);
+  const app = await fetch(`${base}/${first.app}`);
+  assert.equal(app.status, 200);
+  assert.equal(await app.text(), "var app = 1;");
+  assert.match(app.headers.get("cache-control"), /immutable/);
+  assert.match(app.headers.get("content-type"), /javascript/);
+  // 같은 판이면 304
+  assert.equal((await fetch(`${base}/${first.app}`, { headers: { "if-none-match": app.headers.get("etag") } })).status, 304);
+
+  // app.js만 바뀌면 app의 주소만 바뀐다
+  writeFileSync(join(root, "app.js"), "var app = 2;");
+  const second = await linked();
+  assert.notEqual(second.app, first.app);
+  assert.equal(second.plan, first.plan);
+  assert.equal(await (await fetch(`${base}/${second.app}`)).text(), "var app = 2;");
+  // 옛 주소로 와도 지금 파일을 주되 오래 두지 않는다
+  const stale = await fetch(`${base}/${first.app}`);
+  assert.equal(await stale.text(), "var app = 2;");
+  assert.equal(stale.headers.get("cache-control"), "no-cache");
+  // 해시 이름은 화면 파일에만
+  for (const path of ["/server.0123456789.js", "/app.zzzzzzzzzz.js", "/index.0123456789.html"]) assert.equal((await fetch(`${base}${path}`)).status, 404, path);
+});
+
 test("/gaho와 /는 /gaho/로 보낸다(화면이 상대 경로로 파일을 부르므로 /로 끝나야 한다)", async (t) => {
   const origin = await listen(t, { nexon: createNexon({ apiKey: "" }) });
   for (const [path, location] of [["/gaho", "/gaho/"], ["/gaho?x=1", "/gaho/?x=1"], ["/", "/gaho/"]]) {

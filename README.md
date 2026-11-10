@@ -99,6 +99,8 @@ Restart-Service MapleGahoWeb
 
 점검: `Invoke-RestMethod http://127.0.0.1:3400/gaho/api/status`가 `nexon : True`면 이미지 조회가 켜져 있다. 오류는 `logs\web.log`에 남는다.
 
+`index.html`은 `styles.css`·`plan.js`·`app.js`를 내용 해시가 붙은 이름(`app.1a2b3c4d5e.js`)으로 부른다. 그래서 코드를 받은 뒤에도 브라우저나 Cloudflare가 지난 파일을 들고 있어서 새 `index.html`과 짝이 어긋나는 일이 없다(어긋나면 스크립트가 중간에 멈춰 캐릭터 목록이 비고 캐릭터 추가가 안 된다). 해시가 붙은 파일은 1년, `index.html`과 해시 없는 이름은 매번 확인(`no-cache`)으로 내준다.
+
 ## 화면
 
 1. **이번 달 획득 코인**: 이번 달 코인을 넣는다. 주 수는 오늘(한국 시간)부터 다음 달 7일까지로 자동 계산한다(다음 달로 넘어간 주는 **이월**로 표시). 이번 주를 이미 썼으면 "이번 주에도 쓸 수 있음"을 끈다. 그 아래 두 칸:
@@ -112,7 +114,7 @@ Restart-Service MapleGahoWeb
 ## 서버와 넥슨 Open API
 
 - 모든 경로는 `BASE_PATH`(기본 `/gaho`) 아래다. 화면은 파일과 API를 상대 경로로 부르므로 주소가 `/gaho/`처럼 `/`로 끝나야 한다. 그래서 `/gaho`와 `/`는 `/gaho/`로 보내고, `/gaho` 밖의 경로는 404다.
-- `GET /gaho/` 화면 파일(`index.html`, `styles.css`, `app.js`, `plan.js`, `icon.svg`)만 내준다. `.env`·서버 코드는 경로를 맞춰도 404다.
+- `GET /gaho/` 화면 파일(`index.html`, `styles.css`, `app.js`, `plan.js`, `icon.svg`)만 내준다. `.env`·서버 코드는 경로를 맞춰도 404다. 스크립트·스타일은 `app.<내용 해시>.js`처럼 해시가 붙은 이름으로도 받는다(`index.html`이 이 이름으로 부른다).
 - `GET /gaho/api/status` → `{ nexon }`: 서버에 키가 있는지. 화면은 이것으로 이미지 조회를 켜고 끈다.
 - `GET /gaho/api/character?name=` → `{ name, image, level, job, world }`. 서버가 넥슨 `GET /maplestory/v1/id?character_name=`로 ocid를, `GET /maplestory/v1/character/basic?ocid=`로 기본 정보를 받는다(헤더 `x-nxopen-api-key`). 실패하면 `{ error: { code, short, message } }`.
 - 호출을 아낀다: ocid 7일, 기본 정보 1시간 캐시. 서버 전체에서 한 줄로 세워 초당 5건을 넘지 않는다. 하루(한국 날짜) `NEXON_DAILY_LIMIT`건을 넘으면 막는다. 캐릭터 1명 조회에 2건 든다.
