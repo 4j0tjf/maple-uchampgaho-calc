@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>유챔 가호 계산기</title>
-<meta name="description" content="이번 달 획득 챔피언 코인으로 캐릭터별 챔피언의 가호 단계를 주차별로 정한다">
+<meta name="description" content="이번 달 획득 챔피언 코인으로 다음 달 7일(이월 기한)까지 캐릭터별 챔피언의 가호 단계를 주차별로 정한다">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,7 +19,7 @@
     <div class="masthead-text">
       <p class="eyebrow">유니온 챔피언 · 챔피언의 가호</p>
       <h1>유챔 가호 계산기</h1>
-      <p class="lede">이번 달 획득 코인과 캐릭터별 주간 사용 횟수를 넣으면, 오늘부터 이번 달 끝까지 추가 경험치를 뺀 다섯 능력치를 몇 단계로 쓸지 코인이 남지 않게 정해 줍니다.</p>
+      <p class="lede">이번 달 획득 코인과 캐릭터별 주간 사용 횟수를 넣으면, 오늘부터 다음 달 7일(남은 코인 이월 기한)까지 추가 경험치를 뺀 다섯 능력치를 몇 단계로 쓸지 코인이 남지 않게 정해 줍니다.</p>
     </div>
   </div>
 </header>
@@ -33,12 +33,22 @@
   <section class="panel" aria-labelledby="coins-title">
     <h2 id="coins-title">이번 달 획득 코인</h2>
     <div class="coins-grid">
-      <div class="field">
-        <div class="coin-input">
-          <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000" aria-labelledby="coins-title">
-          <span class="unit">코인</span>
+      <div class="coins-col">
+        <div class="field">
+          <div class="coin-input">
+            <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000" aria-labelledby="coins-title">
+            <span class="unit">코인</span>
+          </div>
+          <p class="hint" id="coins-hint">이번 달 챔피언 코인. 매월 1일 0시에 초기화되지만 남은 코인은 다음 달 7일 23:59까지 이월되어 먼저 쓰이므로, 다음 달 7일까지의 주로 나눕니다.</p>
         </div>
-        <p class="hint">이번 달 남은 주 동안 쓸 챔피언 코인. 코인은 매월 1일 0시에 초기화됩니다.</p>
+        <div class="field" id="carry-field" hidden>
+          <label for="carry" id="carry-label">지난달 이월 코인</label>
+          <div class="coin-input">
+            <input id="carry" class="input" inputmode="numeric" autocomplete="off" placeholder="0">
+            <span class="unit">코인</span>
+          </div>
+          <p class="hint" id="carry-hint"></p>
+        </div>
       </div>
       <div class="weeks-box">
         <div class="weeks-head">
@@ -83,7 +93,7 @@
 
   <section class="panel" aria-labelledby="schedule-title">
     <h2 id="schedule-title">주차별 사용</h2>
-    <p class="hint">주마다 캐릭터별로 쓰는 코인(1회 코인 × 횟수)과 남은 코인입니다. 기본 단계보다 한 단계 위로 쓰는 능력치는 ↑로 표시하고, 코인이 쌓인 달 후반 주에 둡니다.</p>
+    <p class="hint">주마다 캐릭터별로 쓰는 코인(1회 코인 × 횟수)과 남은 코인입니다. 기본 단계보다 위로 쓰는 능력치는 ↑로 표시하고, 코인이 쌓인 후반 주에 둡니다. <b>이월</b>은 이번 달 코인이 다음 달로 넘어가 7일까지 쓰는 주입니다. 지난달 이월 코인이 있으면 그 코인을 7일까지 다 쓰도록 앞쪽 주를 먼저 올립니다.</p>
     <div id="schedule"></div>
   </section>
 

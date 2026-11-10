@@ -250,6 +250,10 @@ h1 {
   display: none;
 }
 
+.hint.bad {
+  color: var(--bad);
+}
+
 .source {
   margin: 0;
   font-size: var(--text-xs);
@@ -384,6 +388,13 @@ select.input,
   .coins-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.coins-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .weeks-box {
@@ -1040,6 +1051,11 @@ select.input,
   font-weight: 600;
 }
 
+.grid-table .sub.bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+
 .plan-table {
   min-width: 860px;
 }
@@ -1192,6 +1208,11 @@ select.input,
 
 .left-cell {
   min-width: 8em;
+}
+
+.left-cell .sub {
+  margin-top: 4px;
+  text-align: right;
 }
 
 .left-num {

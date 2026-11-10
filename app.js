@@ -54,6 +54,10 @@
     return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), weekday: d.getUTCDay() };
   }
   const today = kstToday();
+  /** 지난달 이월 코인은 이번 달 1~7일에만 남는다. 다른 달에 넣은 값은 쓰지 않는다. */
+  const monthKey = `${today.year}-${String(today.month).padStart(2, "0")}`;
+  const carryOpen = today.day <= P.CARRY_DAYS;
+  const prevMonth = today.month === 1 ? 12 : today.month - 1;
 
   const emptyFixed = () => Object.fromEntries(P.STAT_KEYS.map((key) => [key, null]));
   let seq = 0;
@@ -63,6 +67,8 @@
     return {
       example: true,
       coins: 20000,
+      carry: 0,
+      carryMonth: "",
       includeCurrent: true,
       characters: [
         { id: uid(), name: "본캐", weekly: 1, fixed: { ...emptyFixed(), boss: 5, ied: 5 }, nexon: null },
@@ -112,6 +118,8 @@
     return {
       example: Boolean(raw.example),
       coins: intIn(raw.coins, 0, 99999999, 0),
+      carry: intIn(raw.carry, 0, 99999999, 0),
+      carryMonth: typeof raw.carryMonth === "string" ? raw.carryMonth : "",
       includeCurrent: raw.includeCurrent !== false,
       characters,
     };
@@ -144,7 +152,9 @@
   }
 
   const weeksNow = () => P.remainingWeeks(today, state.includeCurrent);
-  const range = (month, w) => (w.start === w.end ? `${month}/${w.start}` : `${month}/${w.start}~${month}/${w.end}`);
+  const carryNow = () => (carryOpen && state.carryMonth === monthKey ? state.carry : 0);
+  const md = (d) => `${d.month}/${d.day}`;
+  const range = (w) => (w.start.month === w.end.month && w.start.day === w.end.day ? md(w.start) : `${md(w.start)}~${md(w.end)}`);
 
   /* ---------- 캐릭터 이미지 (넥슨 Open API, 계산기 서버가 대신 부른다) ---------- */
 
@@ -314,6 +324,19 @@
       coins.value = fmt(state.coins);
     });
 
+    $("#carry-field").hidden = !carryOpen;
+    $("#carry-label").textContent = `${prevMonth}월 이월 코인`;
+    const carry = $("#carry");
+    carry.value = fmt(carryNow());
+    carry.addEventListener("input", () => {
+      state.carry = intIn(carry.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
+      state.carryMonth = monthKey;
+      touch();
+    });
+    carry.addEventListener("blur", () => {
+      carry.value = fmt(carryNow());
+    });
+
     const include = $("#include-current");
     include.checked = state.includeCurrent;
     include.addEventListener("change", () => {
@@ -334,8 +357,9 @@
     });
 
     $("#clear-example").addEventListener("click", () => {
-      state = { ...state, example: false, coins: 0, characters: [] };
+      state = { ...state, example: false, coins: 0, carry: 0, characters: [] };
       $("#coins").value = "0";
+      $("#carry").value = "0";
       renderCharacters();
       touch();
       $("#coins").focus();
@@ -344,19 +368,36 @@
     $("#image-refresh").addEventListener("click", () => loadAll(state.characters.filter((c) => c.name.trim())));
   }
 
-  function renderWeeks() {
+  function renderWeeks(plan) {
     const all = P.remainingWeeks(today, true);
     const used = weeksNow();
     const current = all.weeks[0];
-    $("#today-label").textContent = `오늘 ${today.month}월 ${today.day}일(${WEEKDAYS[today.weekday]}) 기준 이번 달 남은 주`;
+    const deadline = all.deadline;
+    $("#today-label").textContent = `오늘 ${today.month}월 ${today.day}일(${WEEKDAYS[today.weekday]}) 기준 ${deadline.month}월 ${deadline.day}일(이월 기한)까지 남은 주`;
     $("#weeks-count").textContent = `${used.weeks.length}주`;
     $("#week-chips").replaceChildren(...all.weeks.map((w) => {
       const off = w.current && !state.includeCurrent;
+      const tag = w.current ? (off ? "빼고 계산" : "이번 주") : w.nextMonth ? "이월" : null;
       return h("li", { class: `week-chip${w.current ? " is-current" : ""}${off ? " is-off" : ""}` },
-        range(all.month, w),
-        w.current ? h("span", { class: "week-tag" }, off ? "빼고 계산" : "이번 주") : null);
+        range(w),
+        tag ? h("span", { class: "week-tag" }, tag) : null);
     }));
-    $("#include-current-label").textContent = `이번 주(${range(all.month, current)})에도 쓸 수 있음`;
+    $("#include-current-label").textContent = `이번 주(${range(current)})에도 쓸 수 있음`;
+    if (carryOpen) renderCarryHint(plan, used);
+  }
+
+  /** 지난달 이월 코인 안내: 언제까지, 어느 주에 먼저 쓰는지, 사라지는 코인. */
+  function renderCarryHint(plan, weeks) {
+    const end = `${today.month}/${P.CARRY_DAYS}`;
+    const hint = $("#carry-hint");
+    const windowWeeks = weeks.weeks.filter((w) => w.carryIn);
+    // 기한(7일) 뒤로 넘어가는 주는 7일까지만 적는다.
+    const names = windowWeeks.map((w) => range({ start: w.start, end: w.end.day > P.CARRY_DAYS ? { month: today.month, day: P.CARRY_DAYS } : w.end }));
+    let text = `${prevMonth}월에 쓰고 남은 코인(게임에서는 이번 달 코인보다 먼저 빠짐). ${end} 23:59까지만 쓸 수 있어 `;
+    text += windowWeeks.length ? `${names.join(", ")}에 쓰는 회차에 먼저 배분합니다.` : "이번 주를 빼면 쓸 주가 없습니다. 이번 주에도 쓸 수 있음을 켜세요.";
+    if (plan.carryLost) text += ` ${fmt(plan.carryLost)}코인은 다 쓰지 못해 사라집니다.`;
+    hint.textContent = text;
+    hint.classList.toggle("bad", plan.carryLost > 0);
   }
 
   function renderExampleNote() {
@@ -497,11 +538,17 @@
 
   function renderResults() {
     const weeks = weeksNow();
-    const plan = P.buildPlan({ coins: state.coins, weeks: weeks.weeks.length, characters: state.characters });
+    const plan = P.buildPlan({
+      coins: state.coins,
+      carry: carryNow(),
+      carryWeeks: weeks.carryWeeks,
+      weeks: weeks.weeks.length,
+      characters: state.characters,
+    });
     const rows = P.buildSchedule(plan);
-    renderWeeks();
+    renderWeeks(plan);
     renderStatus(plan);
-    renderSummary(plan);
+    renderSummary(plan, weeks);
     renderPlanTable(plan);
     renderNext(plan);
     renderSchedule(plan, rows, weeks);
@@ -522,6 +569,9 @@
     else if (plan.shortfall) {
       tone = "bad";
       text = `고정 단계가 ${fmt(plan.shortfall)}코인 넘침`;
+    } else if (plan.carryLost) {
+      tone = "bad";
+      text = `이월 코인 ${fmt(plan.carryLost)}개 사라짐`;
     } else if (plan.maxed) {
       tone = "good";
       text = plan.leftover ? `모두 5단계 · ${fmt(plan.leftover)}코인 남음` : "모두 5단계 · 남는 코인 없음";
@@ -536,16 +586,23 @@
     chip.textContent = text;
   }
 
-  function renderSummary(plan) {
-    const base = Math.max(plan.coins, plan.used) || 1;
+  function renderSummary(plan, weeks) {
+    const pool = plan.coins + plan.carry;
+    const base = Math.max(pool, plan.used) || 1;
     const pct = (n) => `${(Math.max(0, n) / base) * 100}%`;
-    const over = plan.used > plan.coins;
+    const over = plan.leftover < 0;
+    const left = pool - plan.used;
+    const until = `${md(weeks.deadline)}까지 ${plan.weeks}주`;
     const tiles = [
-      { label: "이번 달 코인", value: fmt(plan.coins), sub: `남은 ${plan.weeks}주` },
+      plan.carry
+        ? { label: "쓸 수 있는 코인", value: fmt(pool), sub: `이번 달 ${fmt(plan.coins)} · ${prevMonth}월 이월 ${fmt(plan.carry)} · ${until}` }
+        : { label: "이번 달 코인", value: fmt(plan.coins), sub: until },
       { label: "쓰는 코인", value: fmt(plan.used), sub: `고정 ${fmt(plan.fixedCoins)} · 자동 ${fmt(plan.autoCoins)}` },
       over
         ? { label: "모자란 코인", value: fmt(-plan.leftover), sub: "고정 단계를 낮추거나 횟수를 줄이세요", tone: "bad" }
-        : { label: "남는 코인", value: fmt(plan.leftover), sub: plan.leftover && !plan.maxed && plan.autoSlots ? "한 단계를 더 올리기엔 모자람" : "" },
+        : plan.carryLost
+          ? { label: "남는 코인", value: fmt(left), sub: `${prevMonth}월 이월 ${fmt(plan.carryLost)}은 ${today.month}/${P.CARRY_DAYS}에 사라짐`, tone: "bad" }
+          : { label: "남는 코인", value: fmt(plan.leftover), sub: plan.leftover && !plan.maxed && plan.autoSlots ? "한 단계를 더 올리기엔 모자람" : "" },
       { label: "사용 횟수", value: `${fmt(plan.totalUses)}회`, sub: `캐릭터 ${activeChars(plan).length}명` },
     ];
     $("#summary").replaceChildren(
@@ -554,11 +611,11 @@
           h("span", { class: "tile-label" }, t.label),
           h("span", { class: "tile-value" }, t.value),
           t.sub ? h("span", { class: "tile-sub" }, t.sub) : null))),
-      h("div", { class: "coin-bar", role: "img", "aria-label": `이번 달 코인 ${fmt(plan.coins)} 중 고정 ${fmt(plan.fixedCoins)}, 자동 ${fmt(plan.autoCoins)}, 남음 ${fmt(Math.max(0, plan.leftover))}` },
+      h("div", { class: "coin-bar", role: "img", "aria-label": `쓸 수 있는 코인 ${fmt(pool)} 중 고정 ${fmt(plan.fixedCoins)}, 자동 ${fmt(plan.autoCoins)}, 남음 ${fmt(Math.max(0, left))}` },
         h("span", { class: "seg seg-fixed", style: `width:${pct(plan.fixedCoins)}` }),
         h("span", { class: "seg seg-auto", style: `width:${pct(plan.autoCoins)}` }),
-        h("span", { class: "seg seg-left", style: `width:${pct(plan.leftover)}` }),
-        over ? h("span", { class: "seg-limit", style: `left:${pct(plan.coins)}` }) : null),
+        h("span", { class: "seg seg-left", style: `width:${pct(left)}` }),
+        over ? h("span", { class: "seg-limit", style: `left:${pct(pool)}` }) : null),
       h("div", { class: "legend" },
         h("span", null, h("i", { class: "sw sw-fixed" }), "고정"),
         h("span", null, h("i", { class: "sw sw-auto" }), "자동 배분"),
@@ -567,18 +624,22 @@
     );
   }
 
+  /** 이번 달에 쓰는 가장 높은 단계. */
+  const topLevel = (stat) => stat.counts.reduce((top, n, level) => (n > 0 ? level : top), stat.level);
+
   function pips(stat) {
+    const top = topLevel(stat);
     return h("span", { class: `pips${stat.mode === "fixed" ? " pips-fixed" : ""}`, "aria-hidden": "true" },
-      [1, 2, 3, 4, 5].map((i) => h("i", { class: i <= stat.level ? "on" : stat.up && i === stat.level + 1 ? "half" : null })));
+      [1, 2, 3, 4, 5].map((i) => h("i", { class: i <= stat.level ? "on" : i <= top ? "half" : null })));
   }
 
-  /** 월간 플랜 칸. 한 단계 위로 쓰는 횟수가 있으면 "2~3단계"와 단계별 횟수를 함께 적는다. */
-  function levelCell(stat, uses) {
-    const off = stat.level === 0 && !stat.up;
-    const label = off ? "안 씀" : stat.up ? `${stat.level}~${stat.level + 1}단계` : `${stat.level}단계`;
-    const split = stat.up
-      ? [`${stat.level + 1}단계 ${stat.up}회`, stat.level ? `${stat.level}단계 ${uses - stat.up}회` : `안 씀 ${uses - stat.up}회`].join(" · ")
-      : null;
+  /** 월간 플랜 칸. 위 단계로 쓰는 횟수가 있으면 "2~3단계"와 단계별 횟수를 함께 적는다. */
+  function levelCell(stat) {
+    const top = topLevel(stat);
+    const off = top === 0;
+    const label = off ? "안 씀" : top > stat.level ? `${stat.level}~${top}단계` : `${stat.level}단계`;
+    const present = stat.counts.map((n, level) => [level, n]).filter(([, n]) => n > 0).reverse();
+    const split = present.length > 1 ? present.map(([level, n]) => `${level ? `${level}단계` : "안 씀"} ${n}회`).join(" · ") : null;
     return h("td", { class: "lv" },
       h("div", { class: "lv-top" },
         h("span", { class: `lv-num${off ? " lv-off" : ""}` }, label),
@@ -623,7 +684,7 @@
       return h("tr", null,
         whoCell(index, effectText(c)),
         h("td", { class: "num" }, `${fmt(c.uses)}회`, h("span", { class: "sub" }, `주 ${c.weekly}회`)),
-        P.STATS.map((s) => levelCell(c.stats[s.key], c.uses)),
+        P.STATS.map((s) => levelCell(c.stats[s.key])),
         h("td", { class: "num" }, fmt(c.perUse), c.upCoins ? h("span", { class: "sub" }, `위 단계 +${fmt(c.upCoins)}`) : null),
         h("td", { class: "num strong" }, fmt(c.monthly)));
     });
@@ -640,7 +701,11 @@
 
   function renderNext(plan) {
     const target = $("#next-hint");
-    if (plan.shortfall) {
+    if (plan.carryLost && !plan.shortfall) {
+      target.textContent = plan.carryWeeks
+        ? `${prevMonth}월 이월 코인을 ${today.month}/${P.CARRY_DAYS}까지 쓰는 주에 모두 5단계로 써도 ${fmt(plan.carryLost)}코인이 남아 사라집니다. 그 주의 주간 사용 횟수를 늘리거나 캐릭터를 추가하면 더 쓸 수 있습니다.`
+        : `이번 주를 빼서 ${prevMonth}월 이월 코인 ${fmt(plan.carryLost)}개를 쓸 주가 없습니다. ${today.month}/${P.CARRY_DAYS}까지 쓸 수 있으면 이번 주에도 쓸 수 있음을 켜세요.`;
+    } else if (plan.shortfall) {
       target.textContent = "고정한 단계만으로 이번 달 코인을 넘어서 자동 칸은 모두 0단계로 두었습니다.";
     } else if (plan.next) {
       const c = sourceOf(plan.next.charIndex);
@@ -652,19 +717,20 @@
     }
   }
 
-  /** 그 주에 기본 단계보다 한 단계 위로 쓰는 능력치. "보뎀 5단계". */
+  /** 그 주에 기본 단계보다 위로 쓰는 능력치. "보뎀 5단계". */
   const upgradesOf = (char, levels) => P.STAT_KEYS.filter((key) => levels[key] > char.stats[key].level).map((key) => `${statOf(key).short} ${levels[key]}단계`);
 
   function weekLabel(weeks, row) {
     const w = weeks.weeks[row.week - 1];
     return h("th", { scope: "row", class: "week-cell" },
       h("span", { class: "week-name" }, `${row.week}주차`),
-      h("span", { class: "week-range" }, range(weeks.month, w)),
-      w.current ? h("span", { class: "week-tag" }, "이번 주") : null);
+      h("span", { class: "week-range" }, range(w)),
+      w.current ? h("span", { class: "week-tag" }, "이번 주") : w.nextMonth ? h("span", { class: "week-tag" }, "이월") : null);
   }
 
   function renderSchedule(plan, rows, weeks) {
     const target = $("#schedule");
+    const pool = plan.coins + plan.carry;
     const indices = plan.chars.map((c, i) => (c.uses ? i : -1)).filter((i) => i >= 0);
     if (!indices.length || !rows.length) {
       target.replaceChildren(h("p", { class: "empty" }, "사용할 캐릭터와 남은 주가 있으면 주차별 코인이 여기에 나옵니다."));
@@ -694,7 +760,10 @@
         h("td", { class: "left-cell" },
           h("span", { class: `left-num${row.remaining < 0 ? " bad" : ""}` }, fmt(row.remaining)),
           h("span", { class: "left-bar", "aria-hidden": "true" },
-            h("i", { style: `width:${plan.coins ? Math.max(0, Math.min(100, (row.remaining / plan.coins) * 100)) : 0}%` })))));
+            h("i", { style: `width:${pool ? Math.max(0, Math.min(100, (row.remaining / pool) * 100)) : 0}%` })),
+          row.carryExpired
+            ? h("span", { class: "sub bad" }, `${prevMonth}월 이월 ${fmt(row.carryExpired)} 사라짐`)
+            : row.carryLeft ? h("span", { class: "sub" }, `${prevMonth}월 이월 ${fmt(row.carryLeft)} 포함`) : null)));
     target.replaceChildren(
       h("div", { class: "table-scroll" }, h("table", { class: "grid-table schedule-table" }, h("thead", null, head), h("tbody", null, body))));
   }
