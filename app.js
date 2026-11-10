@@ -58,6 +58,7 @@
   const monthKey = `${today.year}-${String(today.month).padStart(2, "0")}`;
   const carryOpen = today.day <= P.CARRY_DAYS;
   const prevMonth = today.month === 1 ? 12 : today.month - 1;
+  const nextMonth = today.month === 12 ? 1 : today.month + 1;
 
   const emptyFixed = () => Object.fromEntries(P.STAT_KEYS.map((key) => [key, null]));
   let seq = 0;
@@ -324,10 +325,16 @@
       coins.value = fmt(state.coins);
     });
 
-    $("#carry-field").hidden = !carryOpen;
-    $("#carry-label").textContent = `${prevMonth}월 이월 코인`;
+    // 지난달에서 이월된 코인은 1~7일에만 남는다. 그 밖에는 칸을 보여 주되 닫아 둔다.
+    $("#carry-label").textContent = `${prevMonth}월에서 이월된 코인`;
+    $("#carry-in").classList.toggle("is-closed", !carryOpen);
+    const when = $("#carry-in-when");
+    when.textContent = carryOpen ? `${today.month}/${P.CARRY_DAYS} 23:59까지` : `${today.month}/${P.CARRY_DAYS}에 끝남`;
+    when.classList.toggle("is-open", carryOpen);
     const carry = $("#carry");
-    carry.value = fmt(carryNow());
+    carry.disabled = !carryOpen;
+    carry.value = carryOpen ? fmt(carryNow()) : "";
+    if (!carryOpen) carry.placeholder = "—";
     carry.addEventListener("input", () => {
       state.carry = intIn(carry.value.replace(/\D/g, "") || 0, 0, 99999999, 0);
       state.carryMonth = monthKey;
@@ -336,6 +343,9 @@
     carry.addEventListener("blur", () => {
       carry.value = fmt(carryNow());
     });
+    if (!carryOpen) {
+      $("#carry-hint").textContent = `${prevMonth}월 이월 코인은 ${today.month}/${P.CARRY_DAYS} 23:59에 끝났습니다. 이 칸은 매월 1~7일에 씁니다. ${nextMonth}/1~${nextMonth}/${P.CARRY_DAYS}에 열면 게임에 나오는 ${today.month}월 이월 코인을 넣으세요. 그 코인을 ${nextMonth}/${P.CARRY_DAYS}까지 쓰는 주에 먼저 배분합니다.`;
+    }
 
     const include = $("#include-current");
     include.checked = state.includeCurrent;
@@ -359,7 +369,7 @@
     $("#clear-example").addEventListener("click", () => {
       state = { ...state, example: false, coins: 0, carry: 0, characters: [] };
       $("#coins").value = "0";
-      $("#carry").value = "0";
+      if (carryOpen) $("#carry").value = "0";
       renderCharacters();
       touch();
       $("#coins").focus();
@@ -384,6 +394,37 @@
     }));
     $("#include-current-label").textContent = `이번 주(${range(current)})에도 쓸 수 있음`;
     if (carryOpen) renderCarryHint(plan, used);
+  }
+
+  /**
+   * 다음 달로 이월 예정 코인: 이번 달 마지막 날까지 쓰고 남는 이번 달 코인.
+   * 다음 달에 걸친 주는 시작하는 날(목요일)에 쓴다고 보고 이번 달로 센다.
+   */
+  function renderCarryOut(plan, rows, weeks) {
+    const days = weeks.days;
+    $("#carry-out-label").textContent = `${nextMonth}월로 이월 예정 코인`;
+    $("#carry-out-when").textContent = `${nextMonth}/1 0시 이월 · ${nextMonth}/${P.CARRY_DAYS}까지`;
+    const value = $("#carry-out-value");
+    const lines = $("#carry-out-lines");
+    if (!plan.totalUses) {
+      value.textContent = "—";
+      lines.replaceChildren(h("li", null, "캐릭터와 주간 사용 횟수를 넣으면 이번 달에 쓰고 남는 코인을 계산합니다."));
+      return;
+    }
+    const out = P.carryOver(plan, rows, weeks.weeks);
+    value.textContent = fmt(out.coins);
+    const later = weeks.weeks.filter((w) => w.nextMonth).map(range);
+    const straddle = weeks.weeks.findIndex((w) => !w.nextMonth && w.end.month !== today.month);
+    const items = [
+      h("li", null, `${today.month}/${days}까지 이번 달 코인 `, h("b", null, fmt(out.spent)), " 쓰고 남는 코인", plan.carry ? ` (${prevMonth}월 이월 코인 제외)` : ""),
+    ];
+    if (plan.shortfall) items.push(h("li", { class: "bad" }, "고정 단계가 코인을 넘어 이월할 코인이 모자랍니다."));
+    else if (out.used) items.push(h("li", null, `${later.join(", ")}에 `, h("b", null, fmt(out.used)), " 먼저 씀"));
+    if (out.lost) items.push(h("li", { class: "bad" }, h("b", null, fmt(out.lost)), `은 ${nextMonth}/${P.CARRY_DAYS}까지 못 써서 사라짐`));
+    if (straddle >= 0 && rows[straddle]?.coins) {
+      items.push(h("li", null, `${range(weeks.weeks[straddle])} 주를 ${nextMonth}/1 이후에 쓰면 그 사용분(`, h("b", null, fmt(rows[straddle].coins)), ")만큼 더 이월"));
+    }
+    lines.replaceChildren(...items);
   }
 
   /** 지난달 이월 코인 안내: 언제까지, 어느 주에 먼저 쓰는지, 사라지는 코인. */
@@ -551,6 +592,7 @@
     renderSummary(plan, weeks);
     renderPlanTable(plan);
     renderNext(plan);
+    renderCarryOut(plan, rows, weeks);
     renderSchedule(plan, rows, weeks);
     renderDetails(plan, rows, weeks);
   }

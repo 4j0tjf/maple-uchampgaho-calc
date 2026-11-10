@@ -33,22 +33,12 @@
   <section class="panel" aria-labelledby="coins-title">
     <h2 id="coins-title">이번 달 획득 코인</h2>
     <div class="coins-grid">
-      <div class="coins-col">
-        <div class="field">
-          <div class="coin-input">
-            <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000" aria-labelledby="coins-title">
-            <span class="unit">코인</span>
-          </div>
-          <p class="hint" id="coins-hint">이번 달 챔피언 코인. 매월 1일 0시에 초기화되지만 남은 코인은 다음 달 7일 23:59까지 이월되어 먼저 쓰이므로, 다음 달 7일까지의 주로 나눕니다.</p>
+      <div class="field">
+        <div class="coin-input">
+          <input id="coins" class="input" inputmode="numeric" autocomplete="off" placeholder="예: 20,000" aria-labelledby="coins-title">
+          <span class="unit">코인</span>
         </div>
-        <div class="field" id="carry-field" hidden>
-          <label for="carry" id="carry-label">지난달 이월 코인</label>
-          <div class="coin-input">
-            <input id="carry" class="input" inputmode="numeric" autocomplete="off" placeholder="0">
-            <span class="unit">코인</span>
-          </div>
-          <p class="hint" id="carry-hint"></p>
-        </div>
+        <p class="hint" id="coins-hint">이번 달 챔피언 코인. 매월 1일 0시에 초기화되지만 남은 코인은 다음 달 7일 23:59까지 이월되어 먼저 쓰이므로, 다음 달 7일까지의 주로 나눕니다.</p>
       </div>
       <div class="weeks-box">
         <div class="weeks-head">
@@ -60,6 +50,27 @@
           <input type="checkbox" id="include-current">
           <span id="include-current-label">이번 주에도 쓸 수 있음</span>
         </label>
+      </div>
+    </div>
+    <div class="carry-grid">
+      <div class="carry-box" id="carry-in">
+        <div class="carry-head">
+          <label for="carry" id="carry-label" class="carry-title">지난달에서 이월된 코인</label>
+          <span class="carry-when" id="carry-in-when"></span>
+        </div>
+        <div class="coin-input">
+          <input id="carry" class="input" inputmode="numeric" autocomplete="off" placeholder="0">
+          <span class="unit">코인</span>
+        </div>
+        <p class="hint" id="carry-hint"></p>
+      </div>
+      <div class="carry-box" id="carry-out">
+        <div class="carry-head">
+          <span class="carry-title" id="carry-out-label">다음 달로 이월 예정 코인</span>
+          <span class="carry-when" id="carry-out-when"></span>
+        </div>
+        <div class="carry-value" role="status"><strong id="carry-out-value">0</strong><span class="unit">코인</span></div>
+        <ul class="carry-lines" id="carry-out-lines"></ul>
       </div>
     </div>
   </section>

@@ -256,6 +256,27 @@
   }
 
   /**
+   * 이번 달 코인 중 다음 달 1일 0시에 남아 이월될 코인. 다음 달에 걸친 주(예: 11/26~12/2)는 시작하는 날(목요일)에
+   * 쓴다고 보고 이번 달로 센다. 이월된 코인은 다음 달에 시작하는 주에 먼저 쓰이고, 다음 달 7일이 지나면 남은 만큼 사라진다.
+   * @param {ReturnType<typeof buildPlan>} plan
+   * @param {ReturnType<typeof buildSchedule>} rows
+   * @param {{nextMonth:boolean}[]} weeks remainingWeeks().weeks (rows와 같은 순서)
+   * @returns {{coins:number, spent:number, used:number, lost:number}}
+   *   coins 이월될 코인, spent 그 전에 이번 달 안에 쓰는 이번 달 코인, used 이월된 코인 중 다음 달 7일까지 쓰는 코인, lost 사라지는 코인
+   */
+  function carryOver(plan, rows, weeks) {
+    let left = plan.coins;
+    let later = 0;
+    rows.forEach((row, index) => {
+      if (weeks[index].nextMonth) later += row.coins;
+      else left = row.remaining - row.carryLeft;
+    });
+    const coins = Math.max(0, left);
+    const used = Math.min(later, coins);
+    return { coins, spent: plan.coins - coins, used, lost: coins - used };
+  }
+
+  /**
    * 이번 달 코인을 쓸 주: 오늘이 든 주부터 다음 달 7일(이월 기한)이 든 주까지. 주는 목요일 0시(주간 초기화)에 시작하고,
    * 이번 달 1일 앞과 다음 달 7일 뒤는 잘라 낸다(이번 달 코인은 1일부터 생기고 다음 달 7일 23:59:59에 사라진다).
    * 날짜는 한국 시간 기준으로 넘긴다.
@@ -303,5 +324,5 @@
     };
   }
 
-  return { LEVEL_COST, MAX_LEVEL, CARRY_DAYS, STATS, STAT_KEYS, TIE_ORDER, statText, stepCost, buildPlan, useLevels, buildSchedule, remainingWeeks };
+  return { LEVEL_COST, MAX_LEVEL, CARRY_DAYS, STATS, STAT_KEYS, TIE_ORDER, statText, stepCost, buildPlan, useLevels, buildSchedule, carryOver, remainingWeeks };
 });

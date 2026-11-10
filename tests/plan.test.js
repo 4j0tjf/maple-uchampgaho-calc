@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildPlan, buildSchedule, remainingWeeks, statText } = require("../plan.js");
+const { buildPlan, buildSchedule, carryOver, remainingWeeks, statText } = require("../plan.js");
 
 const auto = () => ({ allstat: null, att: null, boss: null, ied: null, crit: null });
 const levelsOf = (char) => Object.fromEntries(Object.entries(char.stats).map(([key, s]) => [key, s.up ? `${s.level}+${s.up}` : s.level]));
@@ -196,6 +196,33 @@ test("고정 단계도 기한 안의 사용분은 이월 코인부터 낸다", (
   assert.equal(plan.shortfall, 0);
   assert.equal(plan.carryUsed, 500);
   assert.equal(plan.leftover, 0);
+});
+
+test("다음 달로 이월될 코인은 다음 달에 시작하는 주의 사용분과 끝까지 남는 코인이다", () => {
+  // 2026-11-10: 11/5~11/11 … 11/26~12/2(11월로 셈), 12/3~12/7(이월). 주 1회 × 5주
+  const { weeks } = remainingWeeks({ year: 2026, month: 11, day: 10 });
+  const one = (coins) => buildPlan({ coins, weeks: weeks.length, characters: [{ name: "본캐", weekly: 1, fixed: auto() }] });
+  // 7,500 = 1,500 × 5: 마지막 주 1,500이 12월로 이월되어 12/3~12/7에 쓰인다
+  const even = one(7500);
+  assert.deepEqual(carryOver(even, buildSchedule(even), weeks), { coins: 1500, spent: 6000, used: 1500, lost: 0 });
+  // 7,900: 보뎀 2회만 5단계(달 끝 두 번). 12/3~12/7 사용분 1,700
+  const ups = one(7900);
+  assert.deepEqual(carryOver(ups, buildSchedule(ups), weeks), { coins: 1700, spent: 6200, used: 1700, lost: 0 });
+  // 모두 5단계(2,500 × 5 = 12,500)여도 15,000이면 2,500이 남아 12/7 뒤에 사라진다
+  const rich = one(15000);
+  assert.deepEqual(carryOver(rich, buildSchedule(rich), weeks), { coins: 5000, spent: 10000, used: 2500, lost: 2500 });
+  assert.equal(rich.leftover, 2500);
+  // 사용할 캐릭터가 없으면 전부 이월되고 전부 사라진다
+  const idle = buildPlan({ coins: 3000, weeks: weeks.length, characters: [] });
+  assert.deepEqual(carryOver(idle, buildSchedule(idle), weeks), { coins: 3000, spent: 0, used: 0, lost: 3000 });
+});
+
+test("1~7일의 이월 예정은 지난달 이월 코인을 빼고 이번 달 코인만 센다", () => {
+  // 2026-11-02: 앞 두 주에 10월 이월 2,000이 먼저 빠진다. 주 1회 × 6주 × 1,500 = 9,000 = 이월 2,000 + 11월 7,000
+  const { weeks, carryWeeks } = remainingWeeks({ year: 2026, month: 11, day: 2 });
+  const plan = buildPlan({ coins: 7000, carry: 2000, carryWeeks, weeks: weeks.length, characters: [{ name: "본캐", weekly: 1, fixed: auto() }] });
+  assert.equal(plan.carryUsed, 2000);
+  assert.deepEqual(carryOver(plan, buildSchedule(plan), weeks), { coins: 1500, spent: 5500, used: 1500, lost: 0 });
 });
 
 test("능력치 표기", () => {
